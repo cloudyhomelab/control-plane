@@ -1,3 +1,0 @@
-kind: Changed
-body: The `action/` composite only downloads the release's `cpctl`, checked against `SHA256SUMS`, instead of building it with Go. It must be pinned to a release tag or the commit SHA a release tag points at; `@main`, other SHAs, `./action` and runners other than Linux x64 or arm64 fail the step.
-time: 2026-09-26T21:59:58.558041512Z
