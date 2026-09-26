@@ -157,8 +157,9 @@ Send `Idempotency-Key` to make retries safe (cpctl does this per workflow run at
 ## Using it from a workflow
 
 See `examples/workflows/homelab.yml`. The workflow needs `permissions: id-token: write`;
-the `action/` composite builds `cpctl`, submits the job, streams the log and fails the step
-if the job fails. Cancelling the workflow cancels the job.
+the `action/` composite fetches `cpctl` (the release binary when pinned to a release tag,
+otherwise built from source), submits the job, streams the log and fails the step if the job
+fails. Cancelling the workflow cancels the job.
 
 ## Running
 

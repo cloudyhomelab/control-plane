@@ -1,7 +1,7 @@
 # Releasing controlplane
 
 Consumers pin this repository by tag: workflows call `cloudyhomelab/control-plane/action@vX.Y.Z`,
-which builds `cpctl` from the source at that tag, and hosts install the release binaries. A
+which downloads that release's `cpctl`, and hosts install the release binaries. A
 tag that moves, or a release whose files change, silently changes what they run. So a
 published version is never replaced, only superseded, and three workflows spend most of
 their effort refusing to publish. The release itself is one label and two approvals:

@@ -65,25 +65,27 @@ The `${{ ... }}` parts are evaluated in your workflow before the action ever see
 
 ## 3. What the action then does
 
-The composite action runs three steps from `action/action.yml`.
+The composite action gets `cpctl`, then runs it, from `action/action.yml`.
 
-**Step 1: install Go.**
+**Step 1: download `cpctl` from the release.** When the `uses:` ref is a release tag like
+`v0.1.0` and the runner is Linux on x64 or arm64, the action downloads that release's
+`linux-<arch>-cpctl`, checks it against the release's `SHA256SUMS`, and checks that
+`cpctl version` prints the tag's version. A checksum or version mismatch fails the step.
+
+**Step 2: otherwise, build it.** For any other ref (`@main`, a commit SHA, `./action` inside
+this repo), another OS or architecture, or a download that fails, it installs Go and builds
+`cpctl` from the action's own checkout:
 
 ```yaml
 - uses: actions/setup-go@v5
   with:
     go-version-file: ${{ github.action_path }}/../go.mod
+- working-directory: ${{ github.action_path }}/..
+  run: go build -trimpath -o "$RUNNER_TEMP/cpctl" ./cmd/cpctl
 ```
 
 `github.action_path` is where the runner downloaded the action, i.e.
 `.../cloudyhomelab/control-plane/v0.1.0/action`, so `../go.mod` is the controlplane repo's `go.mod`.
-
-**Step 2: build `cpctl`** from that same download:
-
-```yaml
-- working-directory: ${{ github.action_path }}/..
-  run: go build -trimpath -o "$RUNNER_TEMP/cpctl" ./cmd/cpctl
-```
 
 **Step 3: run it.** The inputs are passed as environment variables, not pasted into the script:
 
@@ -159,5 +161,5 @@ apply:
 - **Inside the controlplane repo you can use a local path:** a workflow there can say
   `uses: ./action`, which needs `actions/checkout` first since the path is relative to the
   checkout. That's handy for testing changes to the action before merging.
-- **Speed:** building `cpctl` adds roughly 20 to 40 seconds per step (Go setup plus compile).
-  If that gets annoying, publish `cpctl` as a release binary and change step 2 to download it.
+- **Speed:** a release tag downloads a few MB in about a second. Any other ref builds `cpctl`,
+  which adds roughly 20 to 40 seconds per step (Go setup plus compile).
