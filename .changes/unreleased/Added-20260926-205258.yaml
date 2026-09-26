@@ -1,3 +1,0 @@
-kind: Added
-body: A tag-driven release process that publishes version-stamped linux amd64 and arm64 binaries of `controlplane` and `cpctl`, with `controlplane -version` and `cpctl version` to report them.
-time: 2026-09-26T20:52:58.431706172Z
