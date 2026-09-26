@@ -24,7 +24,7 @@ jobs:
       job_id: ${{ steps.plan.outputs.job_id }}
     steps:
       - id: plan
-        uses: cloudyhome/controlplane/action@main
+        uses: cloudyhomelab/control-plane/action@main
         with:
           server: ${{ env.CP_SERVER }}
           audience: ${{ env.CP_AUDIENCE }}
@@ -42,7 +42,7 @@ jobs:
       group: homelab-terraform
       cancel-in-progress: false
     steps:
-      - uses: cloudyhome/controlplane/action@main
+      - uses: cloudyhomelab/control-plane/action@main
         with:
           server: ${{ env.CP_SERVER }}
           audience: ${{ env.CP_AUDIENCE }}

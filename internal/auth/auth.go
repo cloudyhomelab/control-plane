@@ -12,7 +12,7 @@ import (
 
 	"github.com/coreos/go-oidc/v3/oidc"
 
-	"github.com/cloudyhome/controlplane/internal/policy"
+	"github.com/cloudyhomelab/control-plane/internal/policy"
 )
 
 type Verifier interface {

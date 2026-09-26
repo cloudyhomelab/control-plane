@@ -12,12 +12,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cloudyhome/controlplane/internal/auth"
-	"github.com/cloudyhome/controlplane/internal/config"
-	"github.com/cloudyhome/controlplane/internal/github"
-	"github.com/cloudyhome/controlplane/internal/jobs"
-	"github.com/cloudyhome/controlplane/internal/source"
-	"github.com/cloudyhome/controlplane/internal/testutil"
+	"github.com/cloudyhomelab/control-plane/internal/auth"
+	"github.com/cloudyhomelab/control-plane/internal/config"
+	"github.com/cloudyhomelab/control-plane/internal/github"
+	"github.com/cloudyhomelab/control-plane/internal/jobs"
+	"github.com/cloudyhomelab/control-plane/internal/source"
+	"github.com/cloudyhomelab/control-plane/internal/testutil"
 )
 
 func TestMain(m *testing.M) {

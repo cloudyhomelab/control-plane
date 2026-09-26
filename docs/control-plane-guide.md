@@ -579,7 +579,7 @@ For a line-by-line walkthrough of the `uses:` step, see `github-action-uses.md` 
 
 ### Step 1: let other repos use the action
 
-If `cloudyhome/controlplane` is private: in its GitHub settings, go to Actions > General >
+If `cloudyhomelab/control-plane` is private: in its GitHub settings, go to Actions > General >
 Access and choose "Accessible from repositories in the 'cloudyhome' organization".
 
 ### Step 2: add a workflow to the calling repo
@@ -599,7 +599,7 @@ jobs:
   uptime:
     runs-on: ubuntu-latest
     steps:
-      - uses: cloudyhome/controlplane/action@main
+      - uses: cloudyhomelab/control-plane/action@main
         with:
           server: https://controlplane.cloudyhome.net
           audience: controlplane_cloudyhome
@@ -614,7 +614,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: production        # puts environment=production in the token
     steps:
-      - uses: cloudyhome/controlplane/action@main
+      - uses: cloudyhomelab/control-plane/action@main
         with:
           server: https://controlplane.cloudyhome.net
           audience: controlplane_cloudyhome

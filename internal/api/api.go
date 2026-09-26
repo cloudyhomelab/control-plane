@@ -11,13 +11,13 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/cloudyhome/controlplane/internal/auth"
-	"github.com/cloudyhome/controlplane/internal/config"
-	"github.com/cloudyhome/controlplane/internal/jobs"
-	"github.com/cloudyhome/controlplane/internal/logs"
-	"github.com/cloudyhome/controlplane/internal/params"
-	"github.com/cloudyhome/controlplane/internal/policy"
-	"github.com/cloudyhome/controlplane/internal/source"
+	"github.com/cloudyhomelab/control-plane/internal/auth"
+	"github.com/cloudyhomelab/control-plane/internal/config"
+	"github.com/cloudyhomelab/control-plane/internal/jobs"
+	"github.com/cloudyhomelab/control-plane/internal/logs"
+	"github.com/cloudyhomelab/control-plane/internal/params"
+	"github.com/cloudyhomelab/control-plane/internal/policy"
+	"github.com/cloudyhomelab/control-plane/internal/source"
 )
 
 const maxLogChunk = 1 << 20

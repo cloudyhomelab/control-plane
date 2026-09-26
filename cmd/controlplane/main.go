@@ -15,12 +15,12 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/cloudyhome/controlplane/internal/api"
-	"github.com/cloudyhome/controlplane/internal/auth"
-	"github.com/cloudyhome/controlplane/internal/config"
-	"github.com/cloudyhome/controlplane/internal/github"
-	"github.com/cloudyhome/controlplane/internal/jobs"
-	"github.com/cloudyhome/controlplane/internal/source"
+	"github.com/cloudyhomelab/control-plane/internal/api"
+	"github.com/cloudyhomelab/control-plane/internal/auth"
+	"github.com/cloudyhomelab/control-plane/internal/config"
+	"github.com/cloudyhomelab/control-plane/internal/github"
+	"github.com/cloudyhomelab/control-plane/internal/jobs"
+	"github.com/cloudyhomelab/control-plane/internal/source"
 )
 
 // Set by release builds with -ldflags "-X main.version=X.Y.Z".

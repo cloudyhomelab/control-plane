@@ -12,7 +12,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/cloudyhome/controlplane/internal/config"
+	"github.com/cloudyhomelab/control-plane/internal/config"
 )
 
 var refRE = regexp.MustCompile(`^refs/(heads|tags|pull)/[A-Za-z0-9._/-]+$`)

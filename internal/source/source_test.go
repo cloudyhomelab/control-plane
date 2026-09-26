@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/cloudyhome/controlplane/internal/config"
-	"github.com/cloudyhome/controlplane/internal/testutil"
+	"github.com/cloudyhomelab/control-plane/internal/config"
+	"github.com/cloudyhomelab/control-plane/internal/testutil"
 )
 
 func TestResolveCheckout(t *testing.T) {
