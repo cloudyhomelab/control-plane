@@ -32,46 +32,14 @@ outputs:
 runs:
   using: composite
   steps:
-    # A release tag downloads that release's cpctl; any other ref (main, a SHA, ./action) builds
-    # it. A download that fails falls back to the build; a checksum that fails stops the step.
-    - id: fetch
-      name: Download cpctl
+    - name: Download cpctl
       shell: bash
       env:
         REPO: ${{ github.action_repository }}
         REF: ${{ github.action_ref }}
         OS: ${{ runner.os }}
         ARCH: ${{ runner.arch }}
-      run: |
-        case "$ARCH" in X64) arch=amd64 ;; ARM64) arch=arm64 ;; *) arch="" ;; esac
-        if [[ "$OS" != Linux || -z "$arch" || -z "$REPO" || ! "$REF" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-          echo "No release binary for ref '${REF:-local}' on $OS/$ARCH; building cpctl."
-          echo "downloaded=false" >> "$GITHUB_OUTPUT"
-          exit 0
-        fi
-        base="$GITHUB_SERVER_URL/$REPO/releases/download/$REF"
-        dir="$RUNNER_TEMP/cpctl-release"
-        mkdir -p "$dir"
-        if ! curl -fsSL --retry 3 -o "$dir/SHA256SUMS" "$base/SHA256SUMS" \
-           || ! curl -fsSL --retry 3 -o "$dir/linux-$arch-cpctl" "$base/linux-$arch-cpctl"; then
-          echo "::warning::Could not download cpctl from the $REF release; building it instead."
-          echo "downloaded=false" >> "$GITHUB_OUTPUT"
-          exit 0
-        fi
-        (cd "$dir" && grep " linux-$arch-cpctl\$" SHA256SUMS | sha256sum -c -)
-        install -m 755 "$dir/linux-$arch-cpctl" "$RUNNER_TEMP/cpctl"
-        [ "$("$RUNNER_TEMP/cpctl" version)" = "${REF#v}" ]
-        echo "downloaded=true" >> "$GITHUB_OUTPUT"
-    - if: steps.fetch.outputs.downloaded != 'true'
-      uses: actions/setup-go@v5
-      with:
-        go-version-file: ${{ github.action_path }}/../go.mod
-        cache: false
-    - if: steps.fetch.outputs.downloaded != 'true'
-      name: Build cpctl
-      shell: bash
-      working-directory: ${{ github.action_path }}/..
-      run: go build -trimpath -o "$RUNNER_TEMP/cpctl" ./cmd/cpctl
+      run: bash "$GITHUB_ACTION_PATH/download-cpctl.sh"
     - id: run
       name: Run ${{ inputs.action }}
       shell: bash

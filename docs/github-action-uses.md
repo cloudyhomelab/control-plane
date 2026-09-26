@@ -65,29 +65,20 @@ The `${{ ... }}` parts are evaluated in your workflow before the action ever see
 
 ## 3. What the action then does
 
-The composite action gets `cpctl`, then runs it, from `action/action.yml`.
+The composite action in `action/action.yml` downloads `cpctl` with `action/download-cpctl.sh`,
+then runs it.
 
-**Step 1: download `cpctl` from the release.** When the `uses:` ref is a release tag like
-`v0.1.0` and the runner is Linux on x64 or arm64, the action downloads that release's
+**Step 1: download `cpctl` from the release.** The action only runs released binaries, so
+the `uses:` ref must be a release tag (`@v0.1.0`) or the full commit SHA a release tag points
+at. For a SHA it finds the tag with `git ls-remote --tags`. It then downloads that release's
 `linux-<arch>-cpctl`, checks it against the release's `SHA256SUMS`, and checks that
-`cpctl version` prints the tag's version. A checksum or version mismatch fails the step.
+`cpctl version` prints the release's version.
 
-**Step 2: otherwise, build it.** For any other ref (`@main`, a commit SHA, `./action` inside
-this repo), another OS or architecture, or a download that fails, it installs Go and builds
-`cpctl` from the action's own checkout:
+The step fails, and nothing runs, if the ref is anything else (`@main`, a SHA no release tag
+points at, `./action`), if the runner is not Linux on x64 or arm64, if the download fails, or
+if the checksum or version does not match.
 
-```yaml
-- uses: actions/setup-go@v5
-  with:
-    go-version-file: ${{ github.action_path }}/../go.mod
-- working-directory: ${{ github.action_path }}/..
-  run: go build -trimpath -o "$RUNNER_TEMP/cpctl" ./cmd/cpctl
-```
-
-`github.action_path` is where the runner downloaded the action, i.e.
-`.../cloudyhomelab/control-plane/v0.1.0/action`, so `../go.mod` is the controlplane repo's `go.mod`.
-
-**Step 3: run it.** The inputs are passed as environment variables, not pasted into the script:
+**Step 2: run it.** The inputs are passed as environment variables, not pasted into the script:
 
 ```yaml
 env:
@@ -151,15 +142,13 @@ apply:
 
 - **Permissions:** the calling workflow needs `permissions: id-token: write`. Without it the
   runner won't hand out an OIDC token, and `cpctl` fails with "no OIDC token available".
-- **Private repo:** if `cloudyhomelab/control-plane` is private, other repos can only use its
-  action after you set Settings > Actions > General > Access to "Accessible from repositories
-  in the 'cloudyhomelab' organization".
-- **Pin a release tag, not `@main`:** `@main` runs whatever `main` is at that moment, so a
-  push to the controlplane repo would change every workflow that uses it. `@v0.1.0` runs
-  exactly that release, and with immutable releases on (see RELEASE.md) the tag can't be
-  moved. Moving to a newer release is a deliberate edit of the tag in each workflow.
-- **Inside the controlplane repo you can use a local path:** a workflow there can say
-  `uses: ./action`, which needs `actions/checkout` first since the path is relative to the
-  checkout. That's handy for testing changes to the action before merging.
-- **Speed:** a release tag downloads a few MB in about a second. Any other ref builds `cpctl`,
-  which adds roughly 20 to 40 seconds per step (Go setup plus compile).
+- **The repo must stay public:** the action lists tags and downloads release files without
+  a token. If `cloudyhomelab/control-plane` became private, other repos could only reach its
+  action after Settings > Actions > General > Access is set to "Accessible from repositories
+  in the 'cloudyhomelab' organization", and the download would still fail.
+- **Pin a release:** `@v0.1.0` or its commit SHA runs exactly that release, and with
+  immutable releases on (see RELEASE.md) neither the tag nor its files can change. Moving to
+  a newer release is a deliberate edit of the pin in each workflow.
+- **No local path:** `uses: ./action` fails, since a checkout is not a release. A change to
+  the action is tried by releasing it, or by a rehearsal of the Release workflow for `cpctl`.
+- **Speed:** the download is a few MB and takes about a second; no Go setup or compile.
