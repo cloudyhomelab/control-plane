@@ -27,6 +27,7 @@ const usage = `usage:
   cpctl logs JOB_ID
   cpctl cancel JOB_ID
   cpctl dev-token key=value...   token for a server started with -insecure-dev-auth
+  cpctl version
 
 environment:
   CONTROLPLANE_URL        server base URL (required)
@@ -34,12 +35,19 @@ environment:
   CONTROLPLANE_TOKEN      bearer token to use instead of GitHub OIDC (local testing)
 `
 
+// Set by release builds with -ldflags "-X main.version=X.Y.Z".
+var version = "dev"
+
 func main() {
 	if len(os.Args) < 2 {
 		fmt.Fprint(os.Stderr, usage)
 		os.Exit(2)
 	}
 	cmd, args := os.Args[1], os.Args[2:]
+	if cmd == "version" {
+		fmt.Println(version)
+		return
+	}
 	if cmd == "dev-token" {
 		devToken(args)
 		return

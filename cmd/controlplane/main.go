@@ -23,6 +23,9 @@ import (
 	"github.com/cloudyhome/controlplane/internal/source"
 )
 
+// Set by release builds with -ldflags "-X main.version=X.Y.Z".
+var version = "dev"
+
 func main() {
 	if err := run(); err != nil {
 		slog.Error("fatal", "err", err)
@@ -36,7 +39,13 @@ func run() error {
 	dataDir := flag.String("data-dir", "/var/lib/controlplane", "state directory")
 	devAuth := flag.Bool("insecure-dev-auth", false, "accept unsigned base64 JSON claims as tokens (loopback only)")
 	check := flag.Bool("check", false, "validate the catalog and exit")
+	showVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Println(version)
+		return nil
+	}
 
 	cfg, err := config.Load(*cfgFile)
 	if err != nil {
