@@ -29,7 +29,7 @@ actions:
     lock: homelab-terraform
     timeout: 30m
     params:
-      dir: { type: string, pattern: '[A-Za-z0-9_][A-Za-z0-9_-]*(/[A-Za-z0-9_][A-Za-z0-9_-]*)*' }
+      dir: { type: directory }
     steps:
       - [/usr/local/bin/terraform, "-chdir={{ .dir }}", init, -input=false, -no-color]
       - [/usr/local/bin/terraform, "-chdir={{ .dir }}", plan, -input=false, -no-color, "-out={{ .job_dir }}/tfplan"]

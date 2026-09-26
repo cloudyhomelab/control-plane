@@ -88,9 +88,25 @@ The rules the server enforces:
 - **Working directory:** `<checkout>/<dir>` if the action has a `repo`, otherwise the job's
   own empty directory.
 
-What a caller may send is declared in `params`, each with a type: `enum`, `string` (must have
-a `pattern`, anchored automatically), `int` (optional `min`/`max`) or `bool`. Unknown params
-are rejected.
+What a caller may send is declared in `params`. Unknown params are rejected. Each has a type:
+
+| Type | Accepts | Options |
+|---|---|---|
+| `enum` | one of a fixed list | `values` (required) |
+| `string` | anything matching a pattern, anchored automatically | `pattern` (required) |
+| `int` | a whole number | `min`, `max` |
+| `bool` | `true`/`false` (also `1`/`0`) | |
+| `directory` | a relative path like `terraform/vms`; no leading `/`, no `.` or `..` segments, no hidden directories, no leading `-` | |
+
+All types take an optional `default`; without one the param is required. Use `directory`
+for "a directory in the repo" rather than writing that pattern yourself:
+
+```yaml
+params:
+  dir: { type: directory }
+steps:
+  - [/usr/local/bin/terraform, "-chdir={{ .dir }}", plan, -input=false]
+```
 
 ### Writing steps safely
 
@@ -99,7 +115,8 @@ parsing right is up to you, the catalog owner:
 
 - **Prefer `--flag=value` over `--flag value`** for caller values, so a value starting with `-`
   can't be read as another option.
-- **Prefer `enum`.** When you need `string`, make the `pattern` tight (e.g. `[0-9a-f]{7,40}`).
+- **Prefer `enum` or a built-in type** like `directory`. When you need `string`, make the
+  `pattern` tight (e.g. `[0-9a-f]{7,40}`).
 - **Watch tools that parse values themselves.** `ansible-playbook -e "k=v"` splits on spaces,
   so `-e "version={{ .v }}"` with `v = "1 become_user=root"` sets a second variable. Pass
   inline JSON instead, with a pattern that forbids quotes:

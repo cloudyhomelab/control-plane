@@ -40,9 +40,12 @@ func (spec *Spec) Compile() error {
 		if spec.Min != nil && spec.Max != nil && *spec.Min > *spec.Max {
 			return fmt.Errorf("min > max")
 		}
-	case "bool":
+	case "bool", "directory":
 	default:
 		return fmt.Errorf("unknown type %q", spec.Type)
+	}
+	if spec.Type != "enum" && len(spec.Values) > 0 || spec.Type != "string" && spec.Pattern != "" {
+		return fmt.Errorf("values are only for enum, pattern only for string")
 	}
 	if spec.Default != nil {
 		if _, err := spec.check(*spec.Default); err != nil {
@@ -84,9 +87,19 @@ func (spec *Spec) check(value string) (string, error) {
 			return "", fmt.Errorf("must be a boolean")
 		}
 		return strconv.FormatBool(parsed), nil
+	case "directory":
+		if len(value) > 255 || !directoryPattern.MatchString(value) {
+			return "", fmt.Errorf("must be a relative directory like terraform/vms (no leading /, no . or .. segments, no hidden directories)")
+		}
+		return value, nil
 	}
 	return "", fmt.Errorf("unknown type %q", spec.Type)
 }
+
+// directoryPattern matches a relative path whose segments start with a letter, digit or "_".
+// That rules out "." and "..", hidden directories, a leading "-", absolute paths, empty
+// segments and a trailing "/", so the value stays inside the directory it is joined to.
+var directoryPattern = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.-]*(/[A-Za-z0-9_][A-Za-z0-9_.-]*)*$`)
 
 type Schema map[string]*Spec
 

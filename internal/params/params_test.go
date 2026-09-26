@@ -1,6 +1,9 @@
 package params
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func ptr[T any](value T) *T { return &value }
 
@@ -70,5 +73,29 @@ func TestCompileRejects(t *testing.T) {
 		if err := spec.Compile(); err == nil {
 			t.Errorf("case %d: expected error", index)
 		}
+	}
+}
+
+func TestDirectory(t *testing.T) {
+	spec := &Spec{Type: "directory"}
+	if err := spec.Compile(); err != nil {
+		t.Fatal(err)
+	}
+	for _, dir := range []string{"a", "terraform/vms", "a/b/c/d/e/f/g/h", "stacks/prod_eu-1/network", "k8s.cluster/v1.2"} {
+		if _, err := spec.check(dir); err != nil {
+			t.Errorf("%q should be accepted: %v", dir, err)
+		}
+	}
+	for _, dir := range []string{"", ".", "..", "../etc", "a/../b", "a/./b", "/etc", "a/", "a//b", "-help",
+		".hidden", "vms/.terraform", "a b", "a\\b", "a\nb", strings.Repeat("a", 256)} {
+		if _, err := spec.check(dir); err == nil {
+			t.Errorf("%q should be rejected", dir)
+		}
+	}
+	if err := (&Spec{Type: "directory", Pattern: "x"}).Compile(); err == nil {
+		t.Error("pattern on a directory should be rejected")
+	}
+	if err := (&Spec{Type: "directory", Default: ptr("../x")}).Compile(); err == nil {
+		t.Error("invalid default should be rejected")
 	}
 }
