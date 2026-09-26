@@ -142,6 +142,8 @@ The caller passes the plan job's id (`cpctl run -input-job <id> network.apply`).
 2. Runs the apply at **the plan's ref and commit**, so `init` sees the same code.
 3. Sets `{{ .input_dir }}` to that plan job's directory, where it wrote `tfplan`.
 4. Takes `repo`, and unless set, `dir`, `env_profile` and `lock`, from `network.plan`.
+5. Uses **the plan job's params**. The apply action declares none, a call that sends params is
+   refused, and templates like `{{ .region }}` get the values the plan ran with.
 
 `allowed_refs` still applies to the inherited ref, so a plan made from a pull request can't
 be applied here. `require_ref_match: true` also makes the token's own ref match it, so a PR
@@ -217,6 +219,43 @@ branch restrictions) apply before the job gets a token.
 
 Separately, `server.allowed_org: cloudyhome` rejects every token from outside the org before
 any rule is checked.
+
+#### Requiring specific approvers
+
+`environment: production` in a rule forces the caller's job to run in that environment, but
+the environment's reviewers are set in the calling repository, which the catalog owner may not
+control. To decide in the catalog who must have approved, list them:
+
+```yaml
+homelab.apply:
+  approvers: [binarycodes]
+  allow:
+    - { repository: cloudyhome/homelab, ref: refs/heads/main, environment: production }
+```
+
+Approval still happens in GitHub: the job waits at the environment gate and a reviewer clicks
+approve. When the job then calls the control plane, the server:
+
+1. Requires an `environment` claim in the token (the job ran in an environment).
+2. Reads the run's approval history from the GitHub API,
+   `GET /repos/<repository>/actions/runs/<run_id>/approvals`, using the token's `repository`
+   and `run_id` claims.
+3. Accepts only if one of the `approvers` (case-insensitive) **approved** that same
+   environment in that run.
+
+If the environment has no reviewers, there is no approval record, so the job is refused. If
+someone not in the list approved, the error names who did.
+
+For public repositories the API works without a token, but anonymous calls are limited to 60
+per hour per IP. For private repositories, or to avoid that limit, give the server a token that
+can read Actions on the repo and name its variable in the catalog:
+
+```yaml
+server:
+  github_token_env: CONTROLPLANE_GITHUB_TOKEN   # value goes in /etc/controlplane/env
+```
+
+`server.github_api_url` defaults to `https://api.github.com`; change it for GitHub Enterprise.
 
 ### Step 4 (optional): add parameters
 
@@ -583,6 +622,9 @@ and an `apply` job on main that runs in the `production` environment and passes 
 | `no OIDC token available` | Workflow is missing `permissions: id-token: write`. |
 | `401 invalid token` | Audience mismatch between workflow and `server.oidc_audience`, repo outside `allowed_org`, or an expired token. The server log says which. |
 | `403 forbidden` | No `allow` rule matched. Compare with `select * from audit order by id desc limit 5`, which records repository and subject. A common miss: `environment` is only in the token if the job declares `environment:`. |
+| `403 approval_required` | Action has `approvers`, but the calling job does not declare an `environment:`. |
+| `403 not_approved` | No one in `approvers` approved the job's environment in that run. The message says who did approve, if anyone. |
+| `502 approval_lookup_failed` | The server could not read the run's approvals from GitHub: network, rate limit, or a private repo without `github_token_env`. |
 | `403 ref_mismatch` | Action has `require_ref_match` and the token's `ref` differs from the job's ref. |
 | `422 invalid_params` | Value outside the enum or pattern, missing required param, or unknown param. |
 | `422 ref_not_allowed` / `ref_unresolved` | Ref not in `allowed_refs`, or the server can't fetch it (deploy key, known_hosts, branch name). |

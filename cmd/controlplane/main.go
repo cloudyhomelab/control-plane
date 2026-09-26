@@ -18,6 +18,7 @@ import (
 	"github.com/cloudyhome/controlplane/internal/api"
 	"github.com/cloudyhome/controlplane/internal/auth"
 	"github.com/cloudyhome/controlplane/internal/config"
+	"github.com/cloudyhome/controlplane/internal/github"
 	"github.com/cloudyhome/controlplane/internal/jobs"
 	"github.com/cloudyhome/controlplane/internal/source"
 )
@@ -75,8 +76,11 @@ func run() error {
 	src := source.New(*dataDir, cfg.Repos)
 	mgr := jobs.NewManager(cfg, store, src, *dataDir)
 	srv := &http.Server{
-		Addr:              *listen,
-		Handler:           api.New(cfg, store, mgr, src, verifier).Handler(),
+		Addr: *listen,
+		Handler: api.New(cfg, store, mgr, src, verifier, github.Client{
+			APIURL: cfg.Server.GitHubAPIURL,
+			Token:  os.Getenv(cfg.Server.GitHubTokenEnv),
+		}).Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 		// Submit may fetch from git, so allow a generous write timeout.
 		WriteTimeout: 3 * time.Minute,

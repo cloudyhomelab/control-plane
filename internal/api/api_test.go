@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/cloudyhome/controlplane/internal/auth"
 	"github.com/cloudyhome/controlplane/internal/config"
+	"github.com/cloudyhome/controlplane/internal/github"
 	"github.com/cloudyhome/controlplane/internal/jobs"
 	"github.com/cloudyhome/controlplane/internal/source"
 	"github.com/cloudyhome/controlplane/internal/testutil"
@@ -24,8 +26,19 @@ func TestMain(m *testing.M) {
 }
 
 type harness struct {
-	t   *testing.T
-	srv *httptest.Server
+	t    *testing.T
+	srv  *httptest.Server
+	runs *fakeRuns
+}
+
+// fakeRuns stands in for the GitHub API's workflow run approvals.
+type fakeRuns struct {
+	approvals map[string][]github.Approval // by run_id
+	err       error
+}
+
+func (runs *fakeRuns) RunApprovals(_ context.Context, repository, runID string) ([]github.Approval, error) {
+	return runs.approvals[repository+"#"+runID], runs.err
 }
 
 func newHarness(t *testing.T, mode string) *harness {
@@ -57,13 +70,19 @@ actions:
     allowed_refs: ["refs/heads/main"]
     require_ref_match: true
     steps:
-      - [` + self + `, apply, "{{ .input_dir }}/tfplan"]
+      - [` + self + `, apply, "{{ .region }}", "{{ .input_dir }}/tfplan"]
     allow: [{ repository: cloudyhome/infra, environment: production }]
   host.check:
     steps:
       - [` + self + `, check, "{{ .target }}"]
     env_profile: fake
     params: { target: { type: enum, values: [disk, mem] } }
+    allow: [{ repository: cloudyhome/app }]
+  host.gated:
+    steps:
+      - [` + self + `, gated]
+    env_profile: fake
+    approvers: [binarycodes, other-admin]
     allow: [{ repository: cloudyhome/app }]
 `))
 	if err != nil {
@@ -76,13 +95,14 @@ actions:
 	}
 	src := source.New(data, cfg.Repos)
 	mgr := jobs.NewManager(cfg, store, src, data)
-	srv := httptest.NewServer(New(cfg, store, mgr, src, auth.Dev{AllowedOrg: "cloudyhome"}).Handler())
+	runs := &fakeRuns{approvals: map[string][]github.Approval{}}
+	srv := httptest.NewServer(New(cfg, store, mgr, src, auth.Dev{AllowedOrg: "cloudyhome"}, runs).Handler())
 	t.Cleanup(func() {
 		srv.Close()
 		mgr.Shutdown()
 		store.Close()
 	})
-	return &harness{t: t, srv: srv}
+	return &harness{t: t, srv: srv, runs: runs}
 }
 
 var (
@@ -176,15 +196,16 @@ func TestPlanApplyFlow(t *testing.T) {
 	testHarness.expect(404, infraProd, "POST", "/v1/actions/net.apply/jobs", withInput("doesnotexist"))
 	testHarness.expect(403, infraPR, "POST", "/v1/actions/net.apply/jobs", withInput(plan.ID))
 	testHarness.expect(422, infraPush, "POST", "/v1/actions/net.plan/jobs", `{"params":{"region":"eu"},"input_job_id":"`+plan.ID+`"}`)
+	testHarness.expect(422, infraProd, "POST", "/v1/actions/net.apply/jobs", `{"input_job_id":"`+plan.ID+`","params":{"region":"us"}}`)
 
 	apply := decodeJob(t, testHarness.expect(202, infraProd, "POST", "/v1/actions/net.apply/jobs", withInput(plan.ID)))
-	if apply.CommitSHA != plan.CommitSHA || apply.Ref != plan.Ref || apply.InputJobID != plan.ID {
+	if apply.CommitSHA != plan.CommitSHA || apply.Ref != plan.Ref || apply.InputJobID != plan.ID || apply.Params["region"] != "eu" {
 		t.Errorf("apply did not run at the plan's commit: %+v", apply)
 	}
 	if done := testHarness.waitDone(infraProd, apply.ID); done.Status != jobs.Succeeded {
 		t.Fatalf("apply status %s", done.Status)
 	}
-	if _, applyLog := testHarness.do(infraProd, "GET", "/v1/jobs/"+apply.ID+"/logs", ""); !strings.Contains(string(applyLog), "Apply complete!") {
+	if _, applyLog := testHarness.do(infraProd, "GET", "/v1/jobs/"+apply.ID+"/logs", ""); !strings.Contains(string(applyLog), "fake apply eu ") || !strings.Contains(string(applyLog), "Apply complete!") {
 		t.Errorf("apply log: %s", applyLog)
 	}
 	// An apply job is not a plan job, so it can't be used as input.
@@ -258,4 +279,46 @@ func TestCommandAction(t *testing.T) {
 	testHarness.expect(422, otherRepo, "POST", "/v1/actions/host.check/jobs", `{"ref":"refs/heads/main","params":{"target":"disk"}}`)
 	testHarness.expect(422, otherRepo, "POST", "/v1/actions/host.check/jobs", `{"params":{"target":"/etc/passwd"}}`)
 	testHarness.expect(403, infraPush, "POST", "/v1/actions/host.check/jobs", `{"params":{"target":"disk"}}`)
+}
+
+func TestApprovers(t *testing.T) {
+	testHarness := newHarness(t, "ok")
+	token := func(runID, environment string) map[string]string {
+		claims := map[string]string{"repository": "cloudyhome/app", "repository_owner": "cloudyhome", "run_id": runID}
+		if environment != "" {
+			claims["environment"] = environment
+		}
+		return claims
+	}
+	approve := func(runID, login, state string, environments ...string) {
+		key := "cloudyhome/app#" + runID
+		testHarness.runs.approvals[key] = append(testHarness.runs.approvals[key],
+			github.Approval{Login: login, State: state, Environments: environments})
+	}
+	submit := func(status int, claims map[string]string) []byte {
+		return testHarness.expect(status, claims, "POST", "/v1/actions/host.gated/jobs", `{}`)
+	}
+
+	submit(403, token("1", ""))           // not in an environment
+	submit(403, token("2", "production")) // no approvals recorded
+	approve("3", "someone", "approved", "production")
+	if body := submit(403, token("3", "production")); !strings.Contains(string(body), "approved by someone") {
+		t.Errorf("expected the actual approver in the error: %s", body)
+	}
+	approve("4", "binarycodes", "approved", "staging")
+	submit(403, token("4", "production")) // approved, but a different environment
+	approve("5", "binarycodes", "rejected", "production")
+	submit(403, token("5", "production"))
+
+	approve("6", "BinaryCodes", "approved", "production") // logins are case-insensitive
+	job := decodeJob(t, submit(202, token("6", "production")))
+	if done := testHarness.waitDone(token("6", "production"), job.ID); done.Status != jobs.Succeeded {
+		t.Fatalf("status %s", done.Status)
+	}
+
+	testHarness.runs.err = context.DeadlineExceeded
+	submit(502, token("6", "production"))
+
+	// Actions without approvers never ask GitHub.
+	testHarness.expect(202, token("7", ""), "POST", "/v1/actions/host.check/jobs", `{"params":{"target":"disk"}}`)
 }

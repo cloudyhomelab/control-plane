@@ -1,0 +1,50 @@
+# Example workflow in cloudyhome/homelab.
+# Pull request: plan only, as a preview.
+# Merge to main: plan main, wait for approval in the `production` environment, then apply
+# exactly that plan. Set required reviewers on the environment (Settings > Environments).
+name: terraform
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  CP_SERVER: https://controlplane.example.com
+  CP_AUDIENCE: https://controlplane.example.com
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      job_id: ${{ steps.plan.outputs.job_id }}
+    steps:
+      - id: plan
+        uses: cloudyhome/controlplane/action@main
+        with:
+          server: ${{ env.CP_SERVER }}
+          audience: ${{ env.CP_AUDIENCE }}
+          action: homelab.plan
+          ref: ${{ github.ref }}
+          params: |
+            dir=terraform/vms
+
+  apply:
+    if: github.event_name == 'push'
+    needs: plan
+    runs-on: ubuntu-latest
+    environment: production
+    concurrency:
+      group: homelab-terraform
+      cancel-in-progress: false
+    steps:
+      - uses: cloudyhome/controlplane/action@main
+        with:
+          server: ${{ env.CP_SERVER }}
+          audience: ${{ env.CP_AUDIENCE }}
+          action: homelab.apply
+          input-job: ${{ needs.plan.outputs.job_id }}

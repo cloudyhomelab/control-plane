@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path"
+	"regexp"
 	"sort"
 	"strings"
 	"text/template"
@@ -33,6 +34,11 @@ type Server struct {
 	MaxConcurrentJobs int           `yaml:"max_concurrent_jobs"`
 	CancelGrace       Duration      `yaml:"cancel_grace"`
 	Admins            []policy.Rule `yaml:"admins"`
+	// GitHubAPIURL is where workflow run approvals are read, for actions with approvers.
+	GitHubAPIURL string `yaml:"github_api_url"`
+	// GitHubTokenEnv names the server environment variable holding a GitHub token for that.
+	// Optional for public repositories; private ones need a token that can read Actions.
+	GitHubTokenEnv string `yaml:"github_token_env"`
 }
 
 type Repo struct {
@@ -67,6 +73,9 @@ type Action struct {
 	// RequireRefMatch forces the token's ref to equal the job's ref.
 	RequireRefMatch bool          `yaml:"require_ref_match"`
 	Allow           []policy.Rule `yaml:"allow"`
+	// Approvers are GitHub logins. If set, the calling job must run in a GitHub environment,
+	// and one of them must have approved that environment in the caller's workflow run.
+	Approvers []string `yaml:"approvers"`
 
 	templates [][]*template.Template
 }
@@ -129,6 +138,9 @@ func (cfg *Config) validate() error {
 	if server.CancelGrace.Duration == 0 {
 		server.CancelGrace.Duration = 60 * time.Second
 	}
+	if server.GitHubAPIURL == "" {
+		server.GitHubAPIURL = "https://api.github.com"
+	}
 	for index, rule := range server.Admins {
 		if err := rule.Validate(); err != nil {
 			return fmt.Errorf("server.admins[%d]: %w", index, err)
@@ -169,8 +181,8 @@ func (cfg *Config) actionNames() []string {
 	return names
 }
 
-// inherit fills an action from the action it reads input from. The repo always comes from
-// the input action, because the job runs at the input job's commit.
+// inherit fills an action from the action it reads input from. The repo and params always
+// come from the input action, because the job runs at the input job's commit with its values.
 func (cfg *Config) inherit(action *Action) error {
 	input, ok := cfg.Actions[action.InputFrom]
 	if !ok {
@@ -179,10 +191,10 @@ func (cfg *Config) inherit(action *Action) error {
 	if input.InputFrom != "" {
 		return fmt.Errorf("input_from: %s itself reads input; chains are not supported", action.InputFrom)
 	}
-	if action.Repo != "" {
-		return fmt.Errorf("repo is inherited from %s", action.InputFrom)
+	if action.Repo != "" || len(action.Params) > 0 {
+		return fmt.Errorf("repo and params are inherited from %s", action.InputFrom)
 	}
-	action.Repo = input.Repo
+	action.Repo, action.Params = input.Repo, input.Params
 	if action.Dir == "" {
 		action.Dir = input.Dir
 	}
@@ -226,6 +238,11 @@ func (cfg *Config) validateAction(action *Action) error {
 	if err := validateRules(action.Allow); err != nil {
 		return err
 	}
+	for _, login := range action.Approvers {
+		if !loginPattern.MatchString(login) {
+			return fmt.Errorf("approvers: %q is not a GitHub login", login)
+		}
+	}
 	if action.Timeout.Duration == 0 {
 		action.Timeout.Duration = time.Hour
 	}
@@ -253,6 +270,18 @@ func validateRules(rules []policy.Rule) error {
 		}
 	}
 	return nil
+}
+
+var loginPattern = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$`)
+
+// IsApprover reports whether login may approve this action's jobs. GitHub logins are case-insensitive.
+func (action *Action) IsApprover(login string) bool {
+	for _, approver := range action.Approvers {
+		if strings.EqualFold(approver, login) {
+			return true
+		}
+	}
+	return false
 }
 
 func checkRelPath(field, relPath string) error {

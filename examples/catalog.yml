@@ -7,91 +7,52 @@ server:
       job_workflow_ref: "cloudyhome/infra/.github/workflows/admin.yml@refs/heads/main"
 
 repos:
-  infra:
-    url: git@github.com:cloudyhome/infra.git
-    deploy_key_file: /etc/controlplane/keys/infra
+  # Public repo: plain HTTPS, no credentials. TLS verifies github.com.
+  homelab_public:
+    url: https://github.com/cloudyhome/homelab.git
+  # Private repo: SSH with a read-only deploy key added to that one repo.
+  homelab_private:
+    url: git@github.com:cloudyhome/homelab.git
+    deploy_key_file: /etc/controlplane/keys/homelab
     known_hosts_file: /etc/controlplane/known_hosts
 
 env_profiles:
-  aws-prod:
-    pass_through: [AWS_REGION, AWS_CONFIG_FILE]
-    secrets: [AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY]
+  homelab:
+    pass_through: [TF_VAR_infisical_project_id, TF_VAR_infisical_environment]
+    secrets: [TF_VAR_infisical_client_id, TF_VAR_infisical_client_secret]
     set:
       TF_IN_AUTOMATION: "1"
       CHECKPOINT_DISABLE: "1"
 
 actions:
-  network.plan:
-    description: Plan the shared network stack
-    repo: infra
-    dir: terraform/network
-    env_profile: aws-prod
-    allowed_refs: ["refs/heads/*", "refs/pull/*/merge"]
-    lock: tf-network
+  homelab.plan:
+    description: terraform plan in a given directory of cloudyhome/homelab
+    repo: homelab_public
+    env_profile: homelab
+    allowed_refs: ["refs/pull/*/merge", "refs/heads/main"]
+    require_ref_match: true
+    lock: homelab-terraform
     timeout: 30m
     params:
-      region: { type: enum, values: [eu-west-1, us-east-1] }
+      dir: { type: string, pattern: '[A-Za-z0-9_][A-Za-z0-9_-]*(/[A-Za-z0-9_][A-Za-z0-9_-]*)*' }
     steps:
-      - [/usr/local/bin/terraform, init, -input=false, -no-color]
-      - [/usr/local/bin/terraform, plan, -input=false, -no-color,
-         "-out={{ .job_dir }}/tfplan", "-var=region={{ .region }}"]
+      - [/usr/local/bin/terraform, "-chdir={{ .dir }}", init, -input=false, -no-color]
+      - [/usr/local/bin/terraform, "-chdir={{ .dir }}", plan, -input=false, -no-color, "-out={{ .job_dir }}/tfplan"]
     allow:
-      - repository: cloudyhome/infra
-        event_name: [pull_request, push, workflow_dispatch]
+      - repository: cloudyhome/homelab
+        event_name: [pull_request, push]
 
-  # Reads the saved plan from a network.plan job and applies exactly that.
-  # Repo, dir, env_profile and lock come from network.plan; the job runs at the plan's commit.
-  network.apply:
-    description: Apply a reviewed network.plan
-    input_from: network.plan
+  homelab.apply:
+    description: terraform apply of a homelab.plan made on main
+    input_from: homelab.plan
     allowed_refs: ["refs/heads/main"]
     require_ref_match: true
+    timeout: 30m
     steps:
-      - [/usr/local/bin/terraform, init, -input=false, -no-color]
-      - [/usr/local/bin/terraform, apply, -input=false, -no-color, "{{ .input_dir }}/tfplan"]
+      - [/usr/local/bin/terraform, "-chdir={{ .dir }}", init, -input=false, -no-color]
+      - [/usr/local/bin/terraform, "-chdir={{ .dir }}", apply, -input=false, -no-color, "{{ .input_dir }}/tfplan"]
+    approvers: [binarycodes]
     allow:
-      - repository: cloudyhome/infra
+      - repository: cloudyhome/homelab
         ref: refs/heads/main
         environment: production
-
-  base-image.build:
-    description: Build the base VM image
-    repo: infra
-    dir: packer/base
-    env_profile: aws-prod
-    allowed_refs: ["refs/heads/main", "refs/tags/*"]
-    lock: packer-base
-    timeout: 90m
-    params:
-      version: { type: string, pattern: '[0-9]+\.[0-9]+\.[0-9]+' }
-    steps:
-      - [/usr/local/bin/packer, init, .]
-      - [/usr/local/bin/packer, build, -color=false, -timestamp-ui, "-var=version={{ .version }}", .]
-    allow:
-      - repository: cloudyhome/images
-
-  web.deploy:
-    description: Run the site playbook against one host group
-    repo: infra
-    dir: ansible
-    allowed_refs: ["refs/heads/main"]
-    lock: ansible-prod
-    params:
-      limit: { type: enum, values: [web, api] }
-      app_version: { type: string, pattern: '[0-9a-f]{7,40}' }
-    # Extra vars as inline JSON: `-e key=value` would split a value on spaces into more vars.
-    # --flag=value keeps a value starting with "-" from being read as an option.
-    steps:
-      - [/usr/bin/ansible-playbook, -i, inventories/prod, "--limit={{ .limit }}",
-         '--extra-vars={"app_version": "{{ .app_version }}"}', site.yml]
-    allow:
-      - repository: cloudyhome/app
-        environment: production
-
-  host.uptime:
-    description: Show how long the control plane host has been up
-    timeout: 1m
-    steps:
-      - [/usr/bin/uptime, --pretty]
-    allow:
-      - repository: cloudyhome/infra

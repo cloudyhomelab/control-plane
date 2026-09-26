@@ -28,10 +28,11 @@ type Server struct {
 	mgr      *jobs.Manager
 	src      *source.Source
 	verifier auth.Verifier
+	runs     approvalSource
 }
 
-func New(cfg *config.Config, store *jobs.Store, mgr *jobs.Manager, src *source.Source, verifier auth.Verifier) *Server {
-	return &Server{cfg: cfg, store: store, mgr: mgr, src: src, verifier: verifier}
+func New(cfg *config.Config, store *jobs.Store, mgr *jobs.Manager, src *source.Source, verifier auth.Verifier, runs approvalSource) *Server {
+	return &Server{cfg: cfg, store: store, mgr: mgr, src: src, verifier: verifier, runs: runs}
 }
 
 func (server *Server) Handler() http.Handler {
@@ -118,6 +119,7 @@ type actionInfo struct {
 	Description string                  `json:"description,omitempty"`
 	AllowedRefs []string                `json:"allowed_refs,omitempty"`
 	InputFrom   string                  `json:"input_from,omitempty"`
+	Approvers   []string                `json:"approvers,omitempty"`
 	Params      map[string]*params.Spec `json:"params"`
 }
 
@@ -128,10 +130,16 @@ func (server *Server) listActions(writer http.ResponseWriter, request *http.Requ
 		if !policy.Allowed(action.Allow, claims) {
 			continue
 		}
-		out = append(out, actionInfo{
+		info := actionInfo{
 			Name: name, Description: action.Description,
 			AllowedRefs: action.AllowedRefs, InputFrom: action.InputFrom, Params: action.Params,
-		})
+			Approvers: action.Approvers,
+		}
+		if action.InputFrom != "" {
+			// Callers send no params here; they come from the input job.
+			info.Params = params.Schema{}
+		}
+		out = append(out, info)
 	}
 	writeJSON(writer, http.StatusOK, out)
 	return nil
@@ -155,6 +163,15 @@ func (server *Server) submit(writer http.ResponseWriter, request *http.Request, 
 	}
 	if !policy.Allowed(action.Allow, claims) {
 		return deny(errf(http.StatusForbidden, "forbidden", "caller may not invoke %s", name))
+	}
+	if len(action.Approvers) > 0 {
+		if err := server.checkApproval(request.Context(), claims, action); err != nil {
+			var apiErr *apiError
+			if errors.As(err, &apiErr) && apiErr.status == http.StatusForbidden {
+				return deny(apiErr)
+			}
+			return err
+		}
 	}
 
 	idemKey := request.Header.Get("Idempotency-Key")
@@ -181,11 +198,15 @@ func (server *Server) submit(writer http.ResponseWriter, request *http.Request, 
 		ID: jobs.NewID(), Action: name, Status: jobs.Queued, LockKey: action.Lock,
 		Repository: claims["repository"], Caller: claims, IdempotencyKey: idemKey, CreatedAt: time.Now(),
 	}
-	vals, err := action.Params.Validate(req.Params)
-	if err != nil {
-		return errf(http.StatusUnprocessableEntity, "invalid_params", "%v", err)
+	if action.InputFrom == "" {
+		vals, err := action.Params.Validate(req.Params)
+		if err != nil {
+			return errf(http.StatusUnprocessableEntity, "invalid_params", "%v", err)
+		}
+		job.Params = vals
+	} else if len(req.Params) > 0 {
+		return errf(http.StatusUnprocessableEntity, "invalid_params", "%s takes its params from the input job", name)
 	}
-	job.Params = vals
 	switch {
 	case action.InputFrom != "":
 		if err := server.useInput(request.Context(), claims, action, &req, job); err != nil {
@@ -244,7 +265,8 @@ func (server *Server) submit(writer http.ResponseWriter, request *http.Request, 
 	return nil
 }
 
-// useInput points a job at the earlier job whose output it reads, and runs it at that job's commit.
+// useInput points a job at the earlier job whose output it reads, and runs it at that job's
+// commit with that job's params.
 func (server *Server) useInput(ctx context.Context, claims policy.Claims, action *config.Action, req *submitRequest, job *jobs.Job) error {
 	if req.InputJobID == "" {
 		return errf(http.StatusUnprocessableEntity, "input_required", "%s requires input_job_id", action.Name)
@@ -264,7 +286,7 @@ func (server *Server) useInput(ctx context.Context, claims policy.Claims, action
 	case req.Ref != "" && req.Ref != input.Ref:
 		return errf(http.StatusConflict, "input_mismatch", "input job ran %s, not %s", input.Ref, req.Ref)
 	}
-	job.InputJobID, job.Ref, job.CommitSHA = input.ID, input.Ref, input.CommitSHA
+	job.InputJobID, job.Ref, job.CommitSHA, job.Params = input.ID, input.Ref, input.CommitSHA, input.Params
 	return nil
 }
 

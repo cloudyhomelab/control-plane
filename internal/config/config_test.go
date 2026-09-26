@@ -10,17 +10,28 @@ func TestExampleCatalog(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	apply := cfg.Actions["network.apply"]
-	if apply.Repo != "infra" || apply.Dir != "terraform/network" || apply.Lock != "tf-network" || apply.EnvProfile != "aws-prod" {
+	plan := cfg.Actions["homelab.plan"]
+	values, err := plan.Params.Validate(map[string]string{"dir": "terraform/vms"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, dir := range []string{"", "../etc", "/etc", "a/../b", "a/", "-help", "a b", ".", "vms/.terraform"} {
+		if _, err := plan.Params.Validate(map[string]string{"dir": dir}); err == nil {
+			t.Errorf("dir %q should be rejected", dir)
+		}
+	}
+
+	apply := cfg.Actions["homelab.apply"]
+	if apply.Repo != plan.Repo || apply.Lock != plan.Lock || apply.EnvProfile != plan.EnvProfile || !apply.RequireRefMatch {
 		t.Errorf("apply did not inherit from plan: %+v", apply)
 	}
-	steps, err := apply.RenderSteps(map[string]string{JobDirKey: "/j/2", InputDirKey: "/j/1"})
-	if err != nil || strings.Join(steps[1], " ") != "/usr/local/bin/terraform apply -input=false -no-color /j/1/tfplan" {
+	values[JobDirKey], values[InputDirKey] = "/j/2", "/j/1"
+	steps, err := apply.RenderSteps(values)
+	if err != nil || strings.Join(steps[1], " ") != "/usr/local/bin/terraform -chdir=terraform/vms apply -input=false -no-color /j/1/tfplan" {
 		t.Errorf("apply steps = %q, %v", steps, err)
 	}
-	steps, err = cfg.Actions["web.deploy"].RenderSteps(map[string]string{JobDirKey: "/j", "limit": "web", "app_version": "abc1234"})
-	if err != nil || steps[0][3] != "--limit=web" || steps[0][4] != `--extra-vars={"app_version": "abc1234"}` {
-		t.Errorf("ansible steps = %q, %v", steps, err)
+	if !apply.IsApprover("BinaryCodes") || apply.IsApprover("someone") {
+		t.Errorf("approvers = %v", apply.Approvers)
 	}
 	if cfg.Server.OIDCJWKSURL != GitHubIssuer+"/.well-known/jwks" {
 		t.Errorf("jwks url = %s", cfg.Server.OIDCJWKSURL)
@@ -80,6 +91,11 @@ func TestRejects(t *testing.T) {
 		"input action sets repo": `
   a: { repo: infra, allowed_refs: [x], steps: [[/bin/true]], allow: [{repository: r}] }
   b: { input_from: a, repo: infra, allowed_refs: [x], steps: [[/bin/true]], allow: [{repository: r}] }`,
+		"input action declares params": `
+  a: { repo: infra, allowed_refs: [x], steps: [[/bin/true]], allow: [{repository: r}] }
+  b: { input_from: a, allowed_refs: [x], params: { x: { type: bool } }, steps: [[/bin/true]], allow: [{repository: r}] }`,
+		"bad approver login": `
+  a: { steps: [[/bin/true]], approvers: ["not a login"], allow: [{repository: r}] }`,
 		"input chain": `
   a: { repo: infra, allowed_refs: [x], steps: [[/bin/true]], allow: [{repository: r}] }
   b: { input_from: a, allowed_refs: [x], steps: [[/bin/true]], allow: [{repository: r}] }
