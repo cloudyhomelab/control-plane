@@ -14,9 +14,16 @@ type Claims map[string]string
 
 // KnownClaims are the claim names a rule may reference.
 var KnownClaims = map[string]bool{
-	"repository": true, "repository_owner": true, "ref": true, "ref_type": true,
-	"event_name": true, "environment": true, "workflow_ref": true, "job_workflow_ref": true,
-	"actor": true, "sub": true,
+	"repository":       true,
+	"repository_owner": true,
+	"ref":              true,
+	"ref_type":         true,
+	"event_name":       true,
+	"environment":      true,
+	"workflow_ref":     true,
+	"job_workflow_ref": true,
+	"actor":            true,
+	"sub":              true,
 }
 
 // Patterns accepts a scalar or a list in YAML. `*` matches any run of characters, including `/`.

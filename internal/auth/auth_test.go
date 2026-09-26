@@ -52,9 +52,15 @@ func TestOIDC(t *testing.T) {
 	now := time.Now()
 	good := func() map[string]any {
 		return map[string]any{
-			"iss": "https://issuer.test", "aud": "cp", "sub": "repo:cloudyhome/infra:ref:refs/heads/main",
-			"iat": now.Unix(), "exp": now.Add(5 * time.Minute).Unix(),
-			"repository": "cloudyhome/infra", "repository_owner": "cloudyhome", "ref": "refs/heads/main", "run_id": "42",
+			"iss":              "https://issuer.test",
+			"aud":              "cp",
+			"sub":              "repo:cloudyhome/infra:ref:refs/heads/main",
+			"iat":              now.Unix(),
+			"exp":              now.Add(5 * time.Minute).Unix(),
+			"repository":       "cloudyhome/infra",
+			"repository_owner": "cloudyhome",
+			"ref":              "refs/heads/main",
+			"run_id":           "42",
 		}
 	}
 
