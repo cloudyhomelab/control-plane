@@ -48,6 +48,12 @@ tasks:
     cmds:
       - go vet ./...
 
+  shellcheck:
+    desc: Lint the shell scripts
+    silent: true
+    cmds:
+      - shellcheck action/*.sh .githooks/commit-msg
+
   test:
     desc: Run the tests
     silent: true
@@ -80,4 +86,5 @@ tasks:
       - task: build
       - task: vet
       - task: test
+      - task: shellcheck
       - task: changelog:check

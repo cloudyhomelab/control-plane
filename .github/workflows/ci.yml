@@ -23,5 +23,7 @@ jobs:
         run: task vet
       - name: Test
         run: task test
+      - name: Shellcheck
+        run: task shellcheck
       - name: Changelog
         run: task changelog:check
