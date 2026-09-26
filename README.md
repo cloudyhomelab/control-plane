@@ -185,4 +185,4 @@ go run ./cmd/cpctl run host.uptime
 
 ## Tests
 
-`go test ./...`. Job runs use the test binary as a fake terraform, so no tools are needed.
+`task test` (or `go test ./...`); `task check` runs everything CI does, `task fmt` formats. Job runs use the test binary as a fake terraform, so no tools are needed.

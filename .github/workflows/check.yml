@@ -13,17 +13,15 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      - uses: go-task/setup-task@v1
       - name: Format
-        run: |
-          unformatted=$(gofmt -l .)
-          if [ -n "$unformatted" ]; then
-            echo "Not gofmt'ed:"; echo "$unformatted"; exit 1
-          fi
+        run: task fmt:check
       - name: Build
-        run: go build ./...
-      # vet also compiles the _test.go files, which build skips
+        run: task build
       - name: Vet
-        run: go vet ./...
+        run: task vet
+      - name: Test
+        run: task test
 
   # The single required status check; add every new job to needs.
   all-checks-passed:

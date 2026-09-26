@@ -1,0 +1,44 @@
+version: '3'
+
+tasks:
+  default:
+    deps: [check]
+
+  fmt:
+    desc: Format all Go files in place
+    cmds:
+      - gofmt -w .
+
+  fmt:check:
+    desc: Fail if any Go file is not gofmt'ed
+    silent: true
+    cmds:
+      - |
+        unformatted=$(gofmt -l .)
+        if [ -n "$unformatted" ]; then
+          echo "Not gofmt'ed:"; echo "$unformatted"; exit 1
+        fi
+
+  build:
+    desc: Build controlplane and cpctl into bin/
+    cmds:
+      - CGO_ENABLED=0 go build -trimpath -ldflags=-s -o bin/controlplane ./cmd/controlplane
+      - CGO_ENABLED=0 go build -trimpath -ldflags=-s -o bin/cpctl ./cmd/cpctl
+
+  vet:
+    desc: Report suspicious code (bad printf args, unreachable code, copied locks, ...) in all packages and tests
+    cmds:
+      - go vet ./...
+
+  test:
+    desc: Run the tests
+    cmds:
+      - go test ./...
+
+  check:
+    desc: Everything CI runs
+    cmds:
+      - task: fmt:check
+      - task: build
+      - task: vet
+      - task: test
