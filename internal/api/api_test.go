@@ -37,29 +37,31 @@ server:
   allowed_org: cloudyhome
   cancel_grace: 2s
   admins: [{ repository: cloudyhome/ops }]
-tools: { terraform: { path: ` + self + ` } }
 repos: { infra: { url: ` + origin + ` } }
 env_profiles:
   fake: { set: { ` + testutil.FakeToolEnv + `: "1" } }
 actions:
   net.plan:
-    tool: terraform
-    op: plan
     repo: infra
     dir: tf
     env_profile: fake
     lock: net
     allowed_refs: ["refs/heads/*"]
     params: { region: { type: enum, values: [eu, us] } }
-    vars: { region: "{{ .region }}" }
+    steps:
+      - [` + self + `, init]
+      - [` + self + `, plan, "-out={{ .job_dir }}/tfplan", "-var=region={{ .region }}"]
     allow: [{ repository: cloudyhome/infra }]
   net.apply:
-    from_plan: net.plan
+    input_from: net.plan
     allowed_refs: ["refs/heads/main"]
+    require_ref_match: true
+    steps:
+      - [` + self + `, apply, "{{ .input_dir }}/tfplan"]
     allow: [{ repository: cloudyhome/infra, environment: production }]
   host.check:
-    tool: command
-    command: [` + self + `, check, "{{ .target }}"]
+    steps:
+      - [` + self + `, check, "{{ .target }}"]
     env_profile: fake
     params: { target: { type: enum, values: [disk, mem] } }
     allow: [{ repository: cloudyhome/app }]
@@ -166,24 +168,27 @@ func TestPlanApplyFlow(t *testing.T) {
 	if _, rest := testHarness.do(infraPush, "GET", "/v1/jobs/"+plan.ID+"/logs?offset="+next, ""); len(rest) != 0 {
 		t.Errorf("expected empty tail, got %q", rest)
 	}
-	if planJSON := testHarness.expect(200, infraPush, "GET", "/v1/jobs/"+plan.ID+"/artifacts/plan.json", ""); !strings.Contains(string(planJSON), "format_version") {
-		t.Errorf("plan.json = %s", planJSON)
-	}
 
-	// Apply is only for the production environment on main, and needs the plan.
-	testHarness.expect(403, infraPush, "POST", "/v1/actions/net.apply/jobs", `{"plan_job_id":"`+plan.ID+`"}`)
+	// Apply is only for the production environment on main, and needs a plan job.
+	withInput := func(id string) string { return `{"input_job_id":"` + id + `"}` }
+	testHarness.expect(403, infraPush, "POST", "/v1/actions/net.apply/jobs", withInput(plan.ID))
 	testHarness.expect(422, infraProd, "POST", "/v1/actions/net.apply/jobs", `{}`)
-	testHarness.expect(422, infraProd, "POST", "/v1/actions/net.apply/jobs", `{"plan_job_id":"`+plan.ID+`","params":{"region":"us"}}`)
-	testHarness.expect(403, infraPR, "POST", "/v1/actions/net.apply/jobs", `{"plan_job_id":"`+plan.ID+`"}`)
+	testHarness.expect(404, infraProd, "POST", "/v1/actions/net.apply/jobs", withInput("doesnotexist"))
+	testHarness.expect(403, infraPR, "POST", "/v1/actions/net.apply/jobs", withInput(plan.ID))
+	testHarness.expect(422, infraPush, "POST", "/v1/actions/net.plan/jobs", `{"params":{"region":"eu"},"input_job_id":"`+plan.ID+`"}`)
 
-	apply := decodeJob(t, testHarness.expect(202, infraProd, "POST", "/v1/actions/net.apply/jobs", `{"plan_job_id":"`+plan.ID+`"}`))
-	if apply.CommitSHA != plan.CommitSHA || apply.Params["region"] != "eu" {
-		t.Errorf("apply did not inherit plan: %+v", apply)
+	apply := decodeJob(t, testHarness.expect(202, infraProd, "POST", "/v1/actions/net.apply/jobs", withInput(plan.ID)))
+	if apply.CommitSHA != plan.CommitSHA || apply.Ref != plan.Ref || apply.InputJobID != plan.ID {
+		t.Errorf("apply did not run at the plan's commit: %+v", apply)
 	}
 	if done := testHarness.waitDone(infraProd, apply.ID); done.Status != jobs.Succeeded {
 		t.Fatalf("apply status %s", done.Status)
 	}
-	testHarness.expect(409, infraProd, "POST", "/v1/actions/net.apply/jobs", `{"plan_job_id":"`+plan.ID+`"}`)
+	if _, applyLog := testHarness.do(infraProd, "GET", "/v1/jobs/"+apply.ID+"/logs", ""); !strings.Contains(string(applyLog), "Apply complete!") {
+		t.Errorf("apply log: %s", applyLog)
+	}
+	// An apply job is not a plan job, so it can't be used as input.
+	testHarness.expect(409, infraProd, "POST", "/v1/actions/net.apply/jobs", withInput(apply.ID))
 }
 
 func TestUnresolvableRef(t *testing.T) {

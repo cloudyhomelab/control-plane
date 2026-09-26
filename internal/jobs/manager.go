@@ -15,7 +15,6 @@ import (
 	"github.com/cloudyhome/controlplane/internal/config"
 	"github.com/cloudyhome/controlplane/internal/logs"
 	"github.com/cloudyhome/controlplane/internal/source"
-	"github.com/cloudyhome/controlplane/internal/tools"
 )
 
 var (
@@ -140,10 +139,10 @@ func (manager *Manager) execute(ctx context.Context, job *Job, action *config.Ac
 	ctx, cancel := context.WithTimeoutCause(ctx, action.Timeout.Duration, errTimeout)
 	defer cancel()
 
-	var srcDir string
+	workDir := manager.JobDir(job.ID)
 	if action.Repo != "" {
 		logWriter.Line(fmt.Sprintf("action %s, ref %s, commit %s", job.Action, job.Ref, job.CommitSHA))
-		srcDir = filepath.Join(manager.JobDir(job.ID), "src")
+		srcDir := filepath.Join(manager.JobDir(job.ID), "src")
 		if err := manager.src.Checkout(ctx, action.Repo, job.CommitSHA, srcDir); err != nil {
 			return ctxStatusOr(ctx, Failed), nil, err
 		}
@@ -152,33 +151,31 @@ func (manager *Manager) execute(ctx context.Context, job *Job, action *config.Ac
 				slog.Warn("remove worktree", "job", job.ID, "err", err)
 			}
 		}()
+		workDir = filepath.Join(srcDir, action.Dir)
 	} else {
 		logWriter.Line("action " + job.Action)
 	}
 
-	input := tools.Input{
-		Action: action, ToolPath: manager.cfg.Tools[action.Tool].Path, Params: job.Params,
-		SrcDir: srcDir, JobDir: manager.JobDir(job.ID),
+	values := map[string]string{config.JobDirKey: manager.JobDir(job.ID)}
+	if job.InputJobID != "" {
+		values[config.InputDirKey] = manager.JobDir(job.InputJobID)
 	}
-	if job.PlanJobID != "" {
-		input.PlanFile = filepath.Join(manager.JobDir(job.PlanJobID), tools.PlanFile)
-		if _, err := os.Stat(input.PlanFile); err != nil {
-			return Failed, nil, fmt.Errorf("plan file: %w", err)
-		}
+	for name, value := range job.Params {
+		values[name] = value
 	}
-	steps, err := tools.Prepare(input)
+	steps, err := action.RenderSteps(values)
 	if err != nil {
 		return Failed, nil, err
 	}
 	env := manager.env(action)
-	for _, step := range steps {
-		logWriter.Line("$ " + strings.Join(step.Argv, " "))
-		code, err := runStep(ctx, step, env, logWriter, manager.cfg.Server.CancelGrace.Duration)
+	for _, argv := range steps {
+		logWriter.Line("$ " + strings.Join(argv, " "))
+		code, err := runStep(ctx, argv, workDir, env, logWriter, manager.cfg.Server.CancelGrace.Duration)
 		if err != nil {
 			if ctx.Err() != nil {
 				return ctxStatus(ctx), &code, context.Cause(ctx)
 			}
-			return Failed, &code, fmt.Errorf("%s exited with code %d", step.Argv[0], code)
+			return Failed, &code, fmt.Errorf("%s exited with code %d", argv[0], code)
 		}
 	}
 	zero := 0
@@ -228,11 +225,6 @@ func (manager *Manager) env(action *config.Action) []string {
 	env := []string{
 		"PATH=" + manager.getenv("PATH"),
 		"HOME=" + home,
-		"TF_IN_AUTOMATION=1",
-		"TF_INPUT=0",
-		"CHECKPOINT_DISABLE=1",
-		"ANSIBLE_NOCOLOR=1",
-		"ANSIBLE_FORCE_COLOR=0",
 	}
 	if action.EnvProfile == "" {
 		return env

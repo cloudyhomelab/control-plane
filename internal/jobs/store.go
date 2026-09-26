@@ -36,7 +36,7 @@ type Job struct {
 	Params         map[string]string `json:"params"`
 	Ref            string            `json:"ref"`
 	CommitSHA      string            `json:"commit_sha"`
-	PlanJobID      string            `json:"plan_job_id,omitempty"`
+	InputJobID     string            `json:"input_job_id,omitempty"`
 	LockKey        string            `json:"lock_key,omitempty"`
 	Repository     string            `json:"repository"`
 	Caller         policy.Claims     `json:"-"`
@@ -64,7 +64,7 @@ CREATE TABLE IF NOT EXISTS jobs (
 	params_json TEXT NOT NULL,
 	ref TEXT NOT NULL,
 	commit_sha TEXT NOT NULL,
-	plan_job_id TEXT NOT NULL DEFAULT '',
+	input_job_id TEXT NOT NULL DEFAULT '',
 	lock_key TEXT NOT NULL DEFAULT '',
 	repository TEXT NOT NULL,
 	caller_json TEXT NOT NULL,
@@ -76,7 +76,7 @@ CREATE TABLE IF NOT EXISTS jobs (
 	error TEXT NOT NULL DEFAULT ''
 );
 CREATE UNIQUE INDEX IF NOT EXISTS jobs_idempotency ON jobs(repository, idempotency_key) WHERE idempotency_key != '';
-CREATE INDEX IF NOT EXISTS jobs_plan ON jobs(plan_job_id) WHERE plan_job_id != '';
+CREATE INDEX IF NOT EXISTS jobs_input ON jobs(input_job_id) WHERE input_job_id != '';
 CREATE TABLE IF NOT EXISTS audit (
 	id INTEGER PRIMARY KEY AUTOINCREMENT,
 	ts TEXT NOT NULL,
@@ -115,14 +115,14 @@ func (store *Store) Create(ctx context.Context, job *Job) error {
 	paramsJSON, _ := json.Marshal(job.Params)
 	callerJSON, _ := json.Marshal(job.Caller)
 	_, err := store.db.ExecContext(ctx, `INSERT INTO jobs
-		(id, action, status, params_json, ref, commit_sha, plan_job_id, lock_key, repository, caller_json, idempotency_key, created_at)
+		(id, action, status, params_json, ref, commit_sha, input_job_id, lock_key, repository, caller_json, idempotency_key, created_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		job.ID, job.Action, job.Status, string(paramsJSON), job.Ref, job.CommitSHA, job.PlanJobID, job.LockKey, job.Repository, string(callerJSON),
+		job.ID, job.Action, job.Status, string(paramsJSON), job.Ref, job.CommitSHA, job.InputJobID, job.LockKey, job.Repository, string(callerJSON),
 		job.IdempotencyKey, ts(job.CreatedAt))
 	return err
 }
 
-const cols = `id, action, status, params_json, ref, commit_sha, plan_job_id, lock_key, repository, caller_json,
+const cols = `id, action, status, params_json, ref, commit_sha, input_job_id, lock_key, repository, caller_json,
 	idempotency_key, created_at, started_at, finished_at, exit_code, error`
 
 func (store *Store) Get(ctx context.Context, id string) (*Job, error) {
@@ -131,14 +131,6 @@ func (store *Store) Get(ctx context.Context, id string) (*Job, error) {
 
 func (store *Store) ByIdempotencyKey(ctx context.Context, repository, key string) (*Job, error) {
 	return store.one(ctx, `SELECT `+cols+` FROM jobs WHERE repository = ? AND idempotency_key = ?`, repository, key)
-}
-
-// PlanConsumed reports whether an apply using this plan is queued, running or done successfully.
-func (store *Store) PlanConsumed(ctx context.Context, planID string) (bool, error) {
-	var count int
-	err := store.db.QueryRowContext(ctx, `SELECT count(*) FROM jobs WHERE plan_job_id = ? AND status IN (?, ?, ?)`,
-		planID, Queued, Running, Succeeded).Scan(&count)
-	return count > 0, err
 }
 
 func (store *Store) SetRunning(ctx context.Context, id string, startedAt time.Time) error {
@@ -176,7 +168,7 @@ func (store *Store) one(ctx context.Context, query string, args ...any) (*Job, e
 		exit                   sql.NullInt64
 	)
 	err := store.db.QueryRowContext(ctx, query, args...).Scan(&job.ID, &job.Action, &job.Status, &params, &job.Ref, &job.CommitSHA,
-		&job.PlanJobID, &job.LockKey, &job.Repository, &caller, &job.IdempotencyKey, &create, &started, &finished, &exit, &job.Error)
+		&job.InputJobID, &job.LockKey, &job.Repository, &caller, &job.IdempotencyKey, &create, &started, &finished, &exit, &job.Error)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}

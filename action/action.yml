@@ -18,8 +18,8 @@ inputs:
     description: Git ref to run (defaults to the action's default ref)
     required: false
     default: ""
-  plan-job:
-    description: Plan job id, for apply actions
+  input-job:
+    description: Job id whose output this action reads (actions with input_from)
     required: false
     default: ""
 outputs:
@@ -49,7 +49,7 @@ runs:
         CP_ACTION: ${{ inputs.action }}
         CP_PARAMS: ${{ inputs.params }}
         CP_REF: ${{ inputs.ref }}
-        CP_PLAN_JOB: ${{ inputs.plan-job }}
+        CP_INPUT_JOB: ${{ inputs.input-job }}
       # Inputs travel via env, never interpolated into the script.
       run: |
         args=()
@@ -57,5 +57,5 @@ runs:
           [[ -n "$line" ]] && args+=(-p "$line")
         done <<< "$CP_PARAMS"
         [[ -n "$CP_REF" ]] && args+=(-ref "$CP_REF")
-        [[ -n "$CP_PLAN_JOB" ]] && args+=(-plan-job "$CP_PLAN_JOB")
+        [[ -n "$CP_INPUT_JOB" ]] && args+=(-input-job "$CP_INPUT_JOB")
         "$RUNNER_TEMP/cpctl" run "${args[@]}" "$CP_ACTION"

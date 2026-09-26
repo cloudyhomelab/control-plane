@@ -47,7 +47,7 @@ inputs:
   action:   { required: true }
   params:   { default: "" }
   ref:      { default: "" }
-  plan-job: { default: "" }
+  input-job: { default: "" }
 ```
 
 Each key under `with:` sets one of these. Inside the action they are read as
@@ -95,7 +95,7 @@ env:
   CP_PARAMS: ${{ inputs.params }}
   CP_REF: ${{ inputs.ref }}
 run: |
-  # turns each params line into -p key=value, adds -ref / -plan-job if set
+  # turns each params line into -p key=value, adds -ref / -input-job if set
   "$RUNNER_TEMP/cpctl" run "${args[@]}" "$CP_ACTION"
 ```
 
@@ -142,7 +142,7 @@ apply:
     - uses: cloudyhome/controlplane/action@main
       with:
         action: network.apply
-        plan-job: ${{ needs.plan.outputs.job_id }}
+        input-job: ${{ needs.plan.outputs.job_id }}
 ```
 
 ## 5. Things to know

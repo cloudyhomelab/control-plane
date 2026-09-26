@@ -6,19 +6,19 @@ server:
 actions:
   host.uptime:
     description: Show how long this host has been up
-    tool: command
-    command: [/usr/bin/uptime, --pretty]
     timeout: 1m
+    steps:
+      - [/usr/bin/uptime, --pretty]
     allow:
       - repository: cloudyhome/infra
 
   host.disk:
     description: Show free space on one mount point
-    tool: command
-    command: [/usr/bin/df, -h, "{{ .mount }}"]
     timeout: 1m
     params:
       mount: { type: enum, values: [/, /tmp], default: / }
+    steps:
+      - [/usr/bin/df, -h, "{{ .mount }}"]
     allow:
       - repository: cloudyhome/infra
         environment: production

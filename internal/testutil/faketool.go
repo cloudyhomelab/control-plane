@@ -53,8 +53,6 @@ func RunFakeTool() {
 				os.WriteFile(out, []byte("PLAN"), 0o644)
 			}
 		}
-	case "show":
-		fmt.Println(`{"format_version":"1.2"}`)
 	case "apply":
 		planContent, err := os.ReadFile(args[len(args)-1])
 		if err != nil || string(planContent) != "PLAN" {

@@ -22,7 +22,7 @@ import (
 
 const usage = `usage:
   cpctl actions
-  cpctl run [-p key=value]... [-ref REF] [-plan-job ID] [-no-wait] ACTION
+  cpctl run [-p key=value]... [-ref REF] [-input-job ID] [-no-wait] ACTION
   cpctl status JOB_ID
   cpctl logs JOB_ID
   cpctl cancel JOB_ID
@@ -213,7 +213,7 @@ func (apiClient *client) run(args []string) (int, error) {
 	params := paramFlags{}
 	flagSet.Var(params, "p", "parameter key=value (repeatable)")
 	ref := flagSet.String("ref", "", "git ref (default: the action's default)")
-	planJob := flagSet.String("plan-job", "", "plan job to apply")
+	inputJob := flagSet.String("input-job", "", "job whose output this action reads (actions with input_from)")
 	noWait := flagSet.Bool("no-wait", false, "print the job id and return immediately")
 
 	// Accept flags before and after the action name.
@@ -236,8 +236,8 @@ func (apiClient *client) run(args []string) (int, error) {
 	if *ref != "" {
 		body["ref"] = *ref
 	}
-	if *planJob != "" {
-		body["plan_job_id"] = *planJob
+	if *inputJob != "" {
+		body["input_job_id"] = *inputJob
 	}
 	_, responseBody, err := apiClient.do(context.Background(), "POST", "/v1/actions/"+url.PathEscape(action)+"/jobs", body, hdr)
 	if err != nil {

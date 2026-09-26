@@ -2,15 +2,9 @@ server:
   oidc_audience: https://controlplane.example.com
   allowed_org: cloudyhome
   max_concurrent_jobs: 4
-  plan_max_age: 24h
   admins:
     - repository: cloudyhome/infra
       job_workflow_ref: "cloudyhome/infra/.github/workflows/admin.yml@refs/heads/main"
-
-tools:
-  terraform: { path: /usr/local/bin/terraform }
-  packer: { path: /usr/local/bin/packer }
-  ansible: { path: /usr/bin/ansible-playbook }
 
 repos:
   infra:
@@ -22,12 +16,13 @@ env_profiles:
   aws-prod:
     pass_through: [AWS_REGION, AWS_CONFIG_FILE]
     secrets: [AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY]
+    set:
+      TF_IN_AUTOMATION: "1"
+      CHECKPOINT_DISABLE: "1"
 
 actions:
   network.plan:
     description: Plan the shared network stack
-    tool: terraform
-    op: plan
     repo: infra
     dir: terraform/network
     env_profile: aws-prod
@@ -36,16 +31,24 @@ actions:
     timeout: 30m
     params:
       region: { type: enum, values: [eu-west-1, us-east-1] }
-    vars:
-      region: "{{ .region }}"
+    steps:
+      - [/usr/local/bin/terraform, init, -input=false, -no-color]
+      - [/usr/local/bin/terraform, plan, -input=false, -no-color,
+         "-out={{ .job_dir }}/tfplan", "-var=region={{ .region }}"]
     allow:
       - repository: cloudyhome/infra
         event_name: [pull_request, push, workflow_dispatch]
 
+  # Reads the saved plan from a network.plan job and applies exactly that.
+  # Repo, dir, env_profile and lock come from network.plan; the job runs at the plan's commit.
   network.apply:
     description: Apply a reviewed network.plan
-    from_plan: network.plan
+    input_from: network.plan
     allowed_refs: ["refs/heads/main"]
+    require_ref_match: true
+    steps:
+      - [/usr/local/bin/terraform, init, -input=false, -no-color]
+      - [/usr/local/bin/terraform, apply, -input=false, -no-color, "{{ .input_dir }}/tfplan"]
     allow:
       - repository: cloudyhome/infra
         ref: refs/heads/main
@@ -53,8 +56,6 @@ actions:
 
   base-image.build:
     description: Build the base VM image
-    tool: packer
-    op: build
     repo: infra
     dir: packer/base
     env_profile: aws-prod
@@ -63,36 +64,34 @@ actions:
     timeout: 90m
     params:
       version: { type: string, pattern: '[0-9]+\.[0-9]+\.[0-9]+' }
-    vars:
-      version: "{{ .version }}"
+    steps:
+      - [/usr/local/bin/packer, init, .]
+      - [/usr/local/bin/packer, build, -color=false, -timestamp-ui, "-var=version={{ .version }}", .]
     allow:
       - repository: cloudyhome/images
 
   web.deploy:
     description: Run the site playbook against one host group
-    tool: ansible
-    op: playbook
     repo: infra
     dir: ansible
-    playbook: site.yml
-    inventory: inventories/prod
     allowed_refs: ["refs/heads/main"]
     lock: ansible-prod
     params:
       limit: { type: enum, values: [web, api] }
       app_version: { type: string, pattern: '[0-9a-f]{7,40}' }
-    args:
-      limit: "{{ .limit }}"
-    vars:
-      app_version: "{{ .app_version }}"
+    # Extra vars as inline JSON: `-e key=value` would split a value on spaces into more vars.
+    # --flag=value keeps a value starting with "-" from being read as an option.
+    steps:
+      - [/usr/bin/ansible-playbook, -i, inventories/prod, "--limit={{ .limit }}",
+         '--extra-vars={"app_version": "{{ .app_version }}"}', site.yml]
     allow:
       - repository: cloudyhome/app
         environment: production
 
   host.uptime:
     description: Show how long the control plane host has been up
-    tool: command
-    command: [/usr/bin/uptime, --pretty]
     timeout: 1m
+    steps:
+      - [/usr/bin/uptime, --pretty]
     allow:
       - repository: cloudyhome/infra

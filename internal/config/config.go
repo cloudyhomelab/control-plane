@@ -6,7 +6,6 @@ import (
 	"os"
 	"path"
 	"sort"
-	"strconv"
 	"strings"
 	"text/template"
 	"time"
@@ -21,7 +20,6 @@ const GitHubIssuer = "https://token.actions.githubusercontent.com"
 
 type Config struct {
 	Server      Server                `yaml:"server"`
-	Tools       map[string]Tool       `yaml:"tools"`
 	Repos       map[string]*Repo      `yaml:"repos"`
 	EnvProfiles map[string]EnvProfile `yaml:"env_profiles"`
 	Actions     map[string]*Action    `yaml:"actions"`
@@ -33,13 +31,8 @@ type Server struct {
 	OIDCAudience      string        `yaml:"oidc_audience"`
 	AllowedOrg        string        `yaml:"allowed_org"`
 	MaxConcurrentJobs int           `yaml:"max_concurrent_jobs"`
-	PlanMaxAge        Duration      `yaml:"plan_max_age"`
 	CancelGrace       Duration      `yaml:"cancel_grace"`
 	Admins            []policy.Rule `yaml:"admins"`
-}
-
-type Tool struct {
-	Path string `yaml:"path"`
 }
 
 type Repo struct {
@@ -58,48 +51,31 @@ type EnvProfile struct {
 }
 
 type Action struct {
-	Name        string            `yaml:"-"`
-	Description string            `yaml:"description"`
-	Tool        string            `yaml:"tool"`
-	Op          string            `yaml:"op"`
-	Repo        string            `yaml:"repo"`
-	Dir         string            `yaml:"dir"`
-	EnvProfile  string            `yaml:"env_profile"`
-	AllowedRefs policy.Patterns   `yaml:"allowed_refs"`
-	Lock        string            `yaml:"lock"`
-	Timeout     Duration          `yaml:"timeout"`
-	Params      params.Schema     `yaml:"params"`
-	Vars        map[string]string `yaml:"vars"`
-	FromPlan    string            `yaml:"from_plan"`
-	// RequireRefMatch forces the token's ref to equal the requested ref. Defaults to true for apply.
-	RequireRefMatch *bool         `yaml:"require_ref_match"`
+	Name        string          `yaml:"-"`
+	Description string          `yaml:"description"`
+	Repo        string          `yaml:"repo"`
+	Dir         string          `yaml:"dir"`
+	EnvProfile  string          `yaml:"env_profile"`
+	AllowedRefs policy.Patterns `yaml:"allowed_refs"`
+	Lock        string          `yaml:"lock"`
+	Timeout     Duration        `yaml:"timeout"`
+	Params      params.Schema   `yaml:"params"`
+	// Steps are argv lists run in order. Elements may be templates, each filling exactly one argv slot.
+	Steps [][]string `yaml:"steps"`
+	// InputFrom names the action whose job output this action reads, via {{ .input_dir }}.
+	InputFrom string `yaml:"input_from"`
+	// RequireRefMatch forces the token's ref to equal the job's ref.
+	RequireRefMatch bool          `yaml:"require_ref_match"`
 	Allow           []policy.Rule `yaml:"allow"`
 
-	// Ansible only.
-	Playbook  string            `yaml:"playbook"`
-	Inventory string            `yaml:"inventory"`
-	Args      map[string]string `yaml:"args"`
-
-	// Command only: fixed argv. Elements may be templates, each filling exactly one argv slot.
-	Command []string `yaml:"command"`
-
-	templates map[string]*template.Template
+	templates [][]*template.Template
 }
 
-// Ops lists the operations each tool supports.
-var Ops = map[string][]string{
-	"terraform": {"plan", "apply", "validate"},
-	"packer":    {"build", "validate"},
-	"ansible":   {"playbook", "check"},
-	"command":   {"run"},
-}
-
-// AnsibleArgs maps the allowed ansible `args` keys to their flags.
-var AnsibleArgs = map[string]string{
-	"limit":     "--limit",
-	"tags":      "--tags",
-	"skip_tags": "--skip-tags",
-}
+// Template values the server provides alongside the action's params.
+const (
+	JobDirKey   = "job_dir"
+	InputDirKey = "input_dir"
+)
 
 type Duration struct{ time.Duration }
 
@@ -150,23 +126,12 @@ func (cfg *Config) validate() error {
 	if server.MaxConcurrentJobs <= 0 {
 		server.MaxConcurrentJobs = 4
 	}
-	if server.PlanMaxAge.Duration == 0 {
-		server.PlanMaxAge.Duration = 24 * time.Hour
-	}
 	if server.CancelGrace.Duration == 0 {
 		server.CancelGrace.Duration = 60 * time.Second
 	}
 	for index, rule := range server.Admins {
 		if err := rule.Validate(); err != nil {
 			return fmt.Errorf("server.admins[%d]: %w", index, err)
-		}
-	}
-	if cfg.Tools == nil {
-		cfg.Tools = map[string]Tool{}
-	}
-	for tool := range Ops {
-		if tool != "command" && cfg.Tools[tool].Path == "" {
-			cfg.Tools[tool] = Tool{Path: defaultBinary(tool)}
 		}
 	}
 	for name, repo := range cfg.Repos {
@@ -177,31 +142,22 @@ func (cfg *Config) validate() error {
 			repo.DefaultRef = "refs/heads/main"
 		}
 	}
-	// Plan actions first, so apply actions can inherit from validated plans.
+	// Inherit from input actions before validating, so inherited settings are checked too.
 	for _, name := range cfg.actionNames() {
 		action := cfg.Actions[name]
 		action.Name = name
-		if action.FromPlan == "" {
-			if err := cfg.validateAction(action); err != nil {
+		if action.InputFrom != "" {
+			if err := cfg.inherit(action); err != nil {
 				return fmt.Errorf("actions.%s: %w", name, err)
 			}
 		}
 	}
 	for _, name := range cfg.actionNames() {
-		if action := cfg.Actions[name]; action.FromPlan != "" {
-			if err := cfg.validateApply(action); err != nil {
-				return fmt.Errorf("actions.%s: %w", name, err)
-			}
+		if err := cfg.validateAction(cfg.Actions[name]); err != nil {
+			return fmt.Errorf("actions.%s: %w", name, err)
 		}
 	}
 	return nil
-}
-
-func defaultBinary(tool string) string {
-	if tool == "ansible" {
-		return "ansible-playbook"
-	}
-	return tool
 }
 
 func (cfg *Config) actionNames() []string {
@@ -213,23 +169,36 @@ func (cfg *Config) actionNames() []string {
 	return names
 }
 
-func (cfg *Config) validateAction(action *Action) error {
-	if action.Tool == "command" && action.Op == "" {
-		action.Op = "run"
-	}
-	ops, ok := Ops[action.Tool]
+// inherit fills an action from the action it reads input from. The repo always comes from
+// the input action, because the job runs at the input job's commit.
+func (cfg *Config) inherit(action *Action) error {
+	input, ok := cfg.Actions[action.InputFrom]
 	if !ok {
-		return fmt.Errorf("unknown tool %q", action.Tool)
+		return fmt.Errorf("input_from: unknown action %q", action.InputFrom)
 	}
-	if !contains(ops, action.Op) {
-		return fmt.Errorf("tool %s has no op %q (have %v)", action.Tool, action.Op, ops)
+	if input.InputFrom != "" {
+		return fmt.Errorf("input_from: %s itself reads input; chains are not supported", action.InputFrom)
 	}
-	if action.Tool == "terraform" && action.Op == "apply" {
-		return fmt.Errorf("terraform apply must use from_plan")
+	if action.Repo != "" {
+		return fmt.Errorf("repo is inherited from %s", action.InputFrom)
 	}
-	if action.Repo == "" && action.Tool == "command" {
-		// A command without a repo runs in an empty job dir; refs do not apply.
-		if action.Dir != "" || len(action.AllowedRefs) > 0 || action.RefMatchRequired() {
+	action.Repo = input.Repo
+	if action.Dir == "" {
+		action.Dir = input.Dir
+	}
+	if action.EnvProfile == "" {
+		action.EnvProfile = input.EnvProfile
+	}
+	if action.Lock == "" {
+		action.Lock = input.Lock
+	}
+	return nil
+}
+
+func (cfg *Config) validateAction(action *Action) error {
+	if action.Repo == "" {
+		// Without a repo the steps run in an empty job dir, so refs do not apply.
+		if action.Dir != "" || len(action.AllowedRefs) > 0 || action.RequireRefMatch {
 			return fmt.Errorf("dir, allowed_refs and require_ref_match need a repo")
 		}
 	} else if _, ok := cfg.Repos[action.Repo]; !ok {
@@ -242,37 +211,17 @@ func (cfg *Config) validateAction(action *Action) error {
 			return fmt.Errorf("unknown env_profile %q", action.EnvProfile)
 		}
 	}
-	if err := checkRelPath("dir", action.Dir, true); err != nil {
+	if err := checkRelPath("dir", action.Dir); err != nil {
 		return err
 	}
-	if action.Tool == "ansible" {
-		if err := checkRelPath("playbook", action.Playbook, false); err != nil {
-			return err
-		}
-		if err := checkRelPath("inventory", action.Inventory, false); err != nil {
-			return err
-		}
-		for key := range action.Args {
-			if _, ok := AnsibleArgs[key]; !ok {
-				return fmt.Errorf("args: unsupported key %q", key)
-			}
-		}
-	} else if action.Playbook != "" || action.Inventory != "" || len(action.Args) > 0 {
-		return fmt.Errorf("playbook, inventory and args are ansible only")
+	if len(action.Steps) == 0 {
+		return fmt.Errorf("steps is required")
 	}
-	if action.Tool == "command" {
-		if len(action.Command) == 0 {
-			return fmt.Errorf("command is required")
-		}
+	for index, step := range action.Steps {
 		// An absolute, literal binary means no PATH lookup and no parameter choosing what runs.
-		if !path.IsAbs(action.Command[0]) || strings.Contains(action.Command[0], "{{") {
-			return fmt.Errorf("command[0] must be a literal absolute path")
+		if len(step) == 0 || !path.IsAbs(step[0]) || strings.Contains(step[0], "{{") {
+			return fmt.Errorf("steps[%d]: first element must be a literal absolute path", index)
 		}
-		if len(action.Vars) > 0 {
-			return fmt.Errorf("vars are not supported for command; use templates in command")
-		}
-	} else if len(action.Command) > 0 {
-		return fmt.Errorf("command is only valid for tool command")
 	}
 	if err := validateRules(action.Allow); err != nil {
 		return err
@@ -284,50 +233,14 @@ func (cfg *Config) validateAction(action *Action) error {
 		action.Params = params.Schema{}
 	}
 	for name, spec := range action.Params {
+		if name == JobDirKey || name == InputDirKey {
+			return fmt.Errorf("params.%s: name is reserved", name)
+		}
 		if err := spec.Compile(); err != nil {
 			return fmt.Errorf("params.%s: %w", name, err)
 		}
 	}
 	return action.compileTemplates()
-}
-
-func (cfg *Config) validateApply(action *Action) error {
-	plan, ok := cfg.Actions[action.FromPlan]
-	if !ok {
-		return fmt.Errorf("from_plan: unknown action %q", action.FromPlan)
-	}
-	if plan.Tool != "terraform" || plan.Op != "plan" {
-		return fmt.Errorf("from_plan must name a terraform plan action")
-	}
-	if action.Tool == "" {
-		action.Tool = "terraform"
-	}
-	if action.Op == "" {
-		action.Op = "apply"
-	}
-	if action.Tool != "terraform" || action.Op != "apply" {
-		return fmt.Errorf("from_plan is only valid for terraform apply")
-	}
-	if action.Repo != "" || action.Dir != "" || action.EnvProfile != "" || len(action.Params) > 0 || len(action.Vars) > 0 {
-		return fmt.Errorf("repo, dir, env_profile, params and vars are inherited from the plan action")
-	}
-	action.Repo, action.Dir, action.EnvProfile = plan.Repo, plan.Dir, plan.EnvProfile
-	// Vars are baked into the saved plan, so apply renders none.
-	action.Params, action.templates = params.Schema{}, map[string]*template.Template{}
-	if action.Lock == "" {
-		action.Lock = plan.Lock
-	}
-	if action.Timeout.Duration == 0 {
-		action.Timeout.Duration = time.Hour
-	}
-	if len(action.AllowedRefs) == 0 {
-		return fmt.Errorf("allowed_refs is required")
-	}
-	if action.RequireRefMatch == nil {
-		required := true
-		action.RequireRefMatch = &required
-	}
-	return validateRules(action.Allow)
 }
 
 func validateRules(rules []policy.Rule) error {
@@ -342,12 +255,9 @@ func validateRules(rules []policy.Rule) error {
 	return nil
 }
 
-func checkRelPath(field, relPath string, allowEmpty bool) error {
+func checkRelPath(field, relPath string) error {
 	if relPath == "" {
-		if allowEmpty {
-			return nil
-		}
-		return fmt.Errorf("%s is required", field)
+		return nil
 	}
 	if path.IsAbs(relPath) || path.Clean(relPath) != relPath || relPath == ".." || strings.HasPrefix(relPath, "../") {
 		return fmt.Errorf("%s must be a clean relative path inside the repo", field)
@@ -355,78 +265,45 @@ func checkRelPath(field, relPath string, allowEmpty bool) error {
 	return nil
 }
 
-// compileTemplates parses vars and args, and checks they only reference declared params.
+// compileTemplates parses every step element and checks it only references declared params
+// and the server-provided values.
 func (action *Action) compileTemplates() error {
-	action.templates = map[string]*template.Template{}
-	probe := map[string]string{}
+	probe := map[string]string{JobDirKey: ""}
+	if action.InputFrom != "" {
+		probe[InputDirKey] = ""
+	}
 	for name := range action.Params {
 		probe[name] = ""
 	}
-	compile := func(kind string, sources map[string]string) error {
-		for key, text := range sources {
-			parsed, err := template.New(kind + "." + key).Option("missingkey=error").Parse(text)
+	action.templates = make([][]*template.Template, len(action.Steps))
+	for stepIndex, step := range action.Steps {
+		for elementIndex, element := range step {
+			label := fmt.Sprintf("steps[%d][%d]", stepIndex, elementIndex)
+			parsed, err := template.New(label).Option("missingkey=error").Parse(element)
 			if err != nil {
-				return fmt.Errorf("%s.%s: %w", kind, key, err)
+				return fmt.Errorf("%s: %w", label, err)
 			}
 			if err := parsed.Execute(&strings.Builder{}, probe); err != nil {
-				return fmt.Errorf("%s.%s: %w", kind, key, err)
+				return fmt.Errorf("%s: %w", label, err)
 			}
-			action.templates[kind+"."+key] = parsed
-		}
-		return nil
-	}
-	if err := compile("vars", action.Vars); err != nil {
-		return err
-	}
-	if err := compile("args", action.Args); err != nil {
-		return err
-	}
-	cmd := map[string]string{}
-	for index, element := range action.Command {
-		cmd[strconv.Itoa(index)] = element
-	}
-	return compile("command", cmd)
-}
-
-// RenderCommand returns the argv of a command action with validated parameter values.
-func (action *Action) RenderCommand(values map[string]string) ([]string, error) {
-	argv := make([]string, len(action.Command))
-	for index := range action.Command {
-		var rendered strings.Builder
-		if err := action.templates["command."+strconv.Itoa(index)].Execute(&rendered, values); err != nil {
-			return nil, err
-		}
-		argv[index] = rendered.String()
-	}
-	return argv, nil
-}
-
-// Render evaluates vars or args ("vars" or "args") with validated parameter values.
-func (action *Action) Render(kind string, values map[string]string) (map[string]string, error) {
-	src := action.Vars
-	if kind == "args" {
-		src = action.Args
-	}
-	out := make(map[string]string, len(src))
-	for key := range src {
-		var rendered strings.Builder
-		if err := action.templates[kind+"."+key].Execute(&rendered, values); err != nil {
-			return nil, err
-		}
-		out[key] = rendered.String()
-	}
-	return out, nil
-}
-
-func (action *Action) RefMatchRequired() bool {
-	return action.RequireRefMatch != nil && *action.RequireRefMatch
-}
-
-func contains(list []string, value string) bool {
-	for _, item := range list {
-		if item == value {
-			return true
+			action.templates[stepIndex] = append(action.templates[stepIndex], parsed)
 		}
 	}
-	return false
+	return nil
+}
+
+// RenderSteps returns the argv of every step. values holds the validated params plus
+// JobDirKey and, for actions with input_from, InputDirKey.
+func (action *Action) RenderSteps(values map[string]string) ([][]string, error) {
+	steps := make([][]string, len(action.templates))
+	for stepIndex, step := range action.templates {
+		for _, parsed := range step {
+			var rendered strings.Builder
+			if err := parsed.Execute(&rendered, values); err != nil {
+				return nil, err
+			}
+			steps[stepIndex] = append(steps[stepIndex], rendered.String())
+		}
+	}
+	return steps, nil
 }

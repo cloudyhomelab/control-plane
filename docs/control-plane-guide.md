@@ -51,40 +51,102 @@ Key points:
 
 ## 2. How catalog entries map to commands
 
-Each action has a `tool` and an `op`. The server turns them into argv lists. There is no
-shell anywhere, so `;`, `|`, `$(...)` in a value are just characters.
+Every action is a list of `steps`. Each step is an argv list, run in order. The job stops at
+the first step that exits non-zero. The server adds nothing: no flags, no var files, no
+defaults. What you write is exactly what runs.
 
-| tool / op | what runs (in `<repo>/<dir>`) |
-|---|---|
-| `terraform` / `plan` | `terraform init -input=false -no-color`<br>`terraform plan -input=false -no-color -out=<job>/tfplan -var-file=<job>/vars.tfvars.json`<br>`terraform show -json <job>/tfplan` (saved as the `plan.json` artifact) |
-| `terraform` / `apply` (via `from_plan`) | `terraform init ...`<br>`terraform apply -input=false -no-color <plan job>/tfplan` |
-| `terraform` / `validate` | `terraform init -backend=false ...`, `terraform validate` |
-| `packer` / `build`, `validate` | `packer init .`<br>`packer build -color=false -timestamp-ui -var-file=<job>/vars.pkrvars.json .` |
-| `ansible` / `playbook`, `check` | `ansible-playbook -i <inventory> --limit=<x> --extra-vars=@<job>/extra-vars.json <playbook>` (`check` adds `--check --diff`) |
-| `command` / `run` | exactly the `command:` list, e.g. `/usr/bin/uptime --pretty` |
+```yaml
+network.plan:
+  repo: infra                       # optional: check out this repo at the pinned commit
+  dir: terraform/network            # optional: run inside <checkout>/terraform/network
+  params:
+    region: { type: enum, values: [eu-west-1, us-east-1] }
+  steps:
+    - [/usr/local/bin/terraform, init, -input=false, -no-color]
+    - [/usr/local/bin/terraform, plan, -input=false, -no-color,
+       "-out={{ .job_dir }}/tfplan", "-var=region={{ .region }}"]
+```
 
-Where caller values end up:
+For `region=eu-west-1` that runs, with no shell:
 
-- `params` declares what a caller may send, each with a type: `enum`, `string` (must have a
-  `pattern`, anchored automatically), `int` (optional `min`/`max`) or `bool`. Unknown params
-  are rejected.
-- `vars` (terraform, packer, ansible) are templates like `"{{ .region }}"`. They are written
-  to a JSON var file, never put on the command line.
-- `args` (ansible only) fill `--limit`, `--tags` or `--skip-tags`.
-- `command` elements (command tool only) may be templates. Each element becomes exactly one
-  argv entry, so a value with spaces stays one argument. The first element must be a literal
-  absolute path, so a parameter can never choose which program runs.
+```
+/usr/local/bin/terraform init -input=false -no-color
+/usr/local/bin/terraform plan -input=false -no-color -out=/var/lib/controlplane/jobs/<id>/tfplan -var=region=eu-west-1
+```
 
-The tool's environment is built from scratch: `PATH`, `HOME=<data-dir>/home` and a few
-`TF_*`/`ANSIBLE_*` settings. Anything else must be listed in the action's `env_profile`:
+The rules the server enforces:
+
+- **The first element of every step must be a literal absolute path.** No `PATH` lookup, and
+  no parameter can choose which program runs.
+- **Each element becomes exactly one argv entry.** A value with spaces, `;`, `|` or `$(...)`
+  stays one argument made of plain characters.
+- **Templates can only use declared params** plus two server values:
+  - `{{ .job_dir }}` is this job's own directory, e.g. for output files like a plan.
+  - `{{ .input_dir }}` is the directory of the input job (only for actions with `input_from`,
+    see below).
+  A template that uses anything else is rejected at startup.
+- **Working directory:** `<checkout>/<dir>` if the action has a `repo`, otherwise the job's
+  own empty directory.
+
+What a caller may send is declared in `params`, each with a type: `enum`, `string` (must have
+a `pattern`, anchored automatically), `int` (optional `min`/`max`) or `bool`. Unknown params
+are rejected.
+
+### Writing steps safely
+
+The server keeps callers from injecting argv elements or shell. Getting each tool's own
+parsing right is up to you, the catalog owner:
+
+- **Prefer `--flag=value` over `--flag value`** for caller values, so a value starting with `-`
+  can't be read as another option.
+- **Prefer `enum`.** When you need `string`, make the `pattern` tight (e.g. `[0-9a-f]{7,40}`).
+- **Watch tools that parse values themselves.** `ansible-playbook -e "k=v"` splits on spaces,
+  so `-e "version={{ .v }}"` with `v = "1 become_user=root"` sets a second variable. Pass
+  inline JSON instead, with a pattern that forbids quotes:
+  `'--extra-vars={"app_version": "{{ .app_version }}"}'`.
+- **Pass variables per value**: `"-var=region={{ .region }}"` for terraform and packer.
+
+### Environment
+
+The child environment is built from scratch: only `PATH` and `HOME=<data-dir>/home`.
+Anything else comes from the action's `env_profile`:
 
 ```yaml
 env_profiles:
   aws-prod:
     pass_through: [AWS_REGION]                            # copied from the server environment
     secrets: [AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY]   # copied, and scrubbed from logs
-    set: { TF_LOG: "" }                                   # fixed values
+    set: { TF_IN_AUTOMATION: "1" }                        # fixed values
 ```
+
+### Chaining two actions: terraform plan, then apply
+
+An action with `input_from: <action>` reads the output of an earlier job of that action:
+
+```yaml
+network.apply:
+  input_from: network.plan
+  allowed_refs: ["refs/heads/main"]
+  require_ref_match: true
+  steps:
+    - [/usr/local/bin/terraform, init, -input=false, -no-color]
+    - [/usr/local/bin/terraform, apply, -input=false, -no-color, "{{ .input_dir }}/tfplan"]
+  allow:
+    - { repository: cloudyhome/infra, ref: refs/heads/main, environment: production }
+```
+
+The caller passes the plan job's id (`cpctl run -input-job <id> network.apply`). The server:
+
+1. Checks the job exists, belongs to the caller's repository, is a `network.plan` job, and
+   `succeeded`.
+2. Runs the apply at **the plan's ref and commit**, so `init` sees the same code.
+3. Sets `{{ .input_dir }}` to that plan job's directory, where it wrote `tfplan`.
+4. Takes `repo`, and unless set, `dir`, `env_profile` and `lock`, from `network.plan`.
+
+`allowed_refs` still applies to the inherited ref, so a plan made from a pull request can't
+be applied here. `require_ref_match: true` also makes the token's own ref match it, so a PR
+workflow can't apply a main plan. Terraform itself refuses a plan that is stale, for example
+when the state changed since the plan or the plan was already applied.
 
 ## 3. Adding and allowing a new command: `uptime`
 
@@ -98,7 +160,7 @@ On the machine (or in the image) where the control plane runs:
 command -v uptime      # /usr/bin/uptime on Arch and Debian
 ```
 
-The path must be absolute. The server refuses to start if `command[0]` is relative.
+The path must be absolute. The server refuses to start if the first element of a step is relative.
 
 ### Step 2: add the action to the catalog
 
@@ -106,9 +168,9 @@ The path must be absolute. The server refuses to start if `command[0]` is relati
 actions:
   host.uptime:
     description: Show how long the control plane host has been up
-    tool: command
-    command: [/usr/bin/uptime, --pretty]
     timeout: 1m
+    steps:
+      - [/usr/bin/uptime, --pretty]
     allow:
       - repository: cloudyhome/infra
 ```
@@ -116,9 +178,8 @@ actions:
 What each line does:
 
 - `host.uptime` is the name the runner uses. Pick any `group.verb` style name.
-- `tool: command` means run a fixed argv. `op` defaults to `run`.
-- `command` is the exact argv. No shell.
-- There is no `repo`, so nothing is checked out and the command runs in an empty job
+- `steps` has one step: the exact argv. No shell.
+- There is no `repo`, so nothing is checked out and the step runs in an empty job
   directory. Callers cannot pass a `ref` to this action.
 - `timeout` makes the job get SIGINT, then SIGKILL after `server.cancel_grace` (60s by default).
 - `allow` lists who may call it. At least one rule is required. With no rules nobody can
@@ -164,10 +225,10 @@ A variant that takes a validated argument:
 ```yaml
   host.disk:
     description: Show free space on one mount point
-    tool: command
-    command: [/usr/bin/df, -h, "{{ .mount }}"]
     params:
       mount: { type: enum, values: [/, /tmp], default: / }
+    steps:
+      - [/usr/bin/df, -h, "{{ .mount }}"]
     allow:
       - repository: cloudyhome/infra
         environment: production
@@ -286,7 +347,7 @@ curl -s -X POST -H "$H" -H 'Content-Type: application/json' \
 
 # with params:  -d '{"params": {"mount": "/tmp"}}'
 # repo actions: -d '{"ref": "refs/heads/main", "params": {...}}'
-# apply:        -d '{"plan_job_id": "<id of a succeeded plan job>"}'
+# apply:        -d '{"input_job_id": "<id of a succeeded plan job>"}'
 
 JOB=<id from above>
 curl -s -H "$H" http://127.0.0.1:8080/v1/jobs/$JOB
@@ -306,8 +367,8 @@ cat data/jobs/<id>/log
 
 ### Testing a repo-based action locally
 
-For terraform, packer, ansible, or a `command` with a `repo`, point a repo at a local git
-directory. The server fetches it like a remote:
+For actions with a `repo`, point the repo at a local git directory. The server fetches it
+like a remote:
 
 ```yaml
 repos:
@@ -315,13 +376,11 @@ repos:
     url: /home/you/src/infra          # local path works; ssh URL in production
 actions:
   web.check:
-    tool: ansible
-    op: check
     repo: infra
     dir: ansible
-    playbook: site.yml
-    inventory: inventories/dev
     allowed_refs: ["refs/heads/*"]
+    steps:
+      - [/usr/bin/ansible-playbook, -i, inventories/dev, --check, --diff, site.yml]
     allow: [{ repository: cloudyhome/app }]
 ```
 
@@ -347,8 +406,8 @@ To change versions:
 podman build -f deploy/Containerfile --build-arg TERRAFORM_VERSION=1.13.3 -t controlplane:latest .
 ```
 
-Make sure the `tools:` paths in your catalog match the image: `/usr/local/bin/terraform`,
-`/usr/local/bin/packer`, `/usr/bin/ansible-playbook`.
+Make sure the binary paths in your catalog's `steps` match the image:
+`/usr/local/bin/terraform`, `/usr/local/bin/packer`, `/usr/bin/ansible-playbook`.
 
 ### Step 2: prepare the host directories
 
@@ -366,7 +425,7 @@ sudo cat /etc/controlplane/keys/infra.pub      # paste into GitHub as a deploy k
 ssh-keyscan github.com | sudo tee /etc/controlplane/known_hosts
 ```
 
-Credentials for tools go in an env file that only root can read:
+Credentials for commands go in an env file that only root can read:
 
 ```sh
 sudo install -m 600 /dev/null /etc/controlplane/env
@@ -375,7 +434,7 @@ sudoedit /etc/controlplane/env
 #   AWS_SECRET_ACCESS_KEY=...
 ```
 
-A variable only reaches a tool if an `env_profile` used by that action lists it.
+A variable only reaches a command if an `env_profile` used by that action lists it.
 
 The image runs as a non-root `controlplane` user, so the data directory and keys must be
 readable by that UID. With rootless podman use `--userns=keep-id` or `chown` them to match.
@@ -455,7 +514,7 @@ This stops a token minted for another service from being replayed here.
    - on workflow cancel (SIGINT), cancels the job on the server.
 
 Inputs: `server`, `audience`, `action`, `params` (one `key=value` per line), `ref`,
-`plan-job`. Outputs: `job_id`, `status`.
+`input-job`. Outputs: `job_id`, `status`.
 
 For a line-by-line walkthrough of the `uses:` step, see `github-action-uses.md` in this folder.
 
@@ -514,14 +573,8 @@ isn't allowed, the step fails with `HTTP 403 forbidden: caller may not invoke ho
 
 `examples/workflows/network.yml` shows the full pattern: a `plan` job on every push and PR,
 and an `apply` job on main that runs in the `production` environment and passes the plan's
-`job_id` as `plan-job`. The server then:
-
-- applies the saved plan file, at the plan's commit and params (the apply action takes no params),
-- refuses if the plan failed, is older than `server.plan_max_age` (24h), or was already applied,
-- refuses if the apply token's `ref` differs from the plan's ref (`require_ref_match`, on by
-  default for apply), so a PR workflow can't apply main.
-
-Before applying, reviewers can read the plan at `GET /v1/jobs/<plan id>/artifacts/plan.json`.
+`job_id` as `input-job`. How the server checks and runs the apply is described under
+"Chaining two actions" in section 2. Reviewers read the plan in the plan job's log.
 
 ## 7. Troubleshooting
 
@@ -530,11 +583,12 @@ Before applying, reviewers can read the plan at `GET /v1/jobs/<plan id>/artifact
 | `no OIDC token available` | Workflow is missing `permissions: id-token: write`. |
 | `401 invalid token` | Audience mismatch between workflow and `server.oidc_audience`, repo outside `allowed_org`, or an expired token. The server log says which. |
 | `403 forbidden` | No `allow` rule matched. Compare with `select * from audit order by id desc limit 5`, which records repository and subject. A common miss: `environment` is only in the token if the job declares `environment:`. |
-| `403 ref_mismatch` | Apply requested from a token whose `ref` differs from the plan's ref. |
+| `403 ref_mismatch` | Action has `require_ref_match` and the token's `ref` differs from the job's ref. |
 | `422 invalid_params` | Value outside the enum or pattern, missing required param, or unknown param. |
 | `422 ref_not_allowed` / `ref_unresolved` | Ref not in `allowed_refs`, or the server can't fetch it (deploy key, known_hosts, branch name). |
-| `409 plan_*` | Plan failed, expired, already applied, or belongs to another action. |
-| Job `failed`, exit code N | The tool itself failed. Read the job log. |
+| `422 input_required` | Action has `input_from` but no `input_job_id` was passed. |
+| `409 input_*` | Input job did not succeed, belongs to another action, or ran a different ref. |
+| Job `failed`, exit code N | A step failed. The log shows which command and its output. |
 | Job `timed_out` | Raise the action's `timeout`. |
 | Job `failed: interrupted by server restart` | The server restarted while the job was queued or running. Jobs are never re-run automatically. |
 | Server won't start | Run `controlplane -config catalog.yml -check`. It names the action and the problem. |

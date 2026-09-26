@@ -8,8 +8,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strconv"
 	"time"
 
@@ -20,7 +18,6 @@ import (
 	"github.com/cloudyhome/controlplane/internal/params"
 	"github.com/cloudyhome/controlplane/internal/policy"
 	"github.com/cloudyhome/controlplane/internal/source"
-	"github.com/cloudyhome/controlplane/internal/tools"
 )
 
 const maxLogChunk = 1 << 20
@@ -44,7 +41,6 @@ func (server *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/actions/{name}/jobs", server.authed(server.submit))
 	mux.HandleFunc("GET /v1/jobs/{id}", server.authed(server.withJob(server.getJob)))
 	mux.HandleFunc("GET /v1/jobs/{id}/logs", server.authed(server.withJob(server.getLogs)))
-	mux.HandleFunc("GET /v1/jobs/{id}/artifacts/plan.json", server.authed(server.withJob(server.getPlanJSON)))
 	mux.HandleFunc("POST /v1/jobs/{id}/cancel", server.authed(server.withJob(server.cancel)))
 	return logRequests(mux)
 }
@@ -118,13 +114,11 @@ func (server *Server) canSee(claims policy.Claims, job *jobs.Job) bool {
 }
 
 type actionInfo struct {
-	Name         string                  `json:"name"`
-	Description  string                  `json:"description,omitempty"`
-	Tool         string                  `json:"tool"`
-	Op           string                  `json:"op"`
-	AllowedRefs  []string                `json:"allowed_refs"`
-	RequiresPlan string                  `json:"requires_plan,omitempty"`
-	Params       map[string]*params.Spec `json:"params"`
+	Name        string                  `json:"name"`
+	Description string                  `json:"description,omitempty"`
+	AllowedRefs []string                `json:"allowed_refs,omitempty"`
+	InputFrom   string                  `json:"input_from,omitempty"`
+	Params      map[string]*params.Spec `json:"params"`
 }
 
 func (server *Server) listActions(writer http.ResponseWriter, request *http.Request, claims policy.Claims) error {
@@ -135,8 +129,8 @@ func (server *Server) listActions(writer http.ResponseWriter, request *http.Requ
 			continue
 		}
 		out = append(out, actionInfo{
-			Name: name, Description: action.Description, Tool: action.Tool, Op: action.Op,
-			AllowedRefs: action.AllowedRefs, RequiresPlan: action.FromPlan, Params: action.Params,
+			Name: name, Description: action.Description,
+			AllowedRefs: action.AllowedRefs, InputFrom: action.InputFrom, Params: action.Params,
 		})
 	}
 	writeJSON(writer, http.StatusOK, out)
@@ -144,9 +138,9 @@ func (server *Server) listActions(writer http.ResponseWriter, request *http.Requ
 }
 
 type submitRequest struct {
-	Ref       string            `json:"ref"`
-	Params    map[string]string `json:"params"`
-	PlanJobID string            `json:"plan_job_id"`
+	Ref        string            `json:"ref"`
+	Params     map[string]string `json:"params"`
+	InputJobID string            `json:"input_job_id"`
 }
 
 func (server *Server) submit(writer http.ResponseWriter, request *http.Request, claims policy.Claims) error {
@@ -187,38 +181,38 @@ func (server *Server) submit(writer http.ResponseWriter, request *http.Request, 
 		ID: jobs.NewID(), Action: name, Status: jobs.Queued, LockKey: action.Lock,
 		Repository: claims["repository"], Caller: claims, IdempotencyKey: idemKey, CreatedAt: time.Now(),
 	}
-	if action.FromPlan != "" {
-		if err := server.fromPlan(request.Context(), claims, action, &req, job); err != nil {
+	vals, err := action.Params.Validate(req.Params)
+	if err != nil {
+		return errf(http.StatusUnprocessableEntity, "invalid_params", "%v", err)
+	}
+	job.Params = vals
+	switch {
+	case action.InputFrom != "":
+		if err := server.useInput(request.Context(), claims, action, &req, job); err != nil {
 			var apiErr *apiError
 			if errors.As(err, &apiErr) {
 				return deny(apiErr)
 			}
 			return err
 		}
-	} else {
-		if req.PlanJobID != "" {
-			return errf(http.StatusUnprocessableEntity, "invalid", "%s does not take plan_job_id", name)
+	case req.InputJobID != "":
+		return errf(http.StatusUnprocessableEntity, "invalid", "%s does not take input_job_id", name)
+	case action.Repo == "":
+		if req.Ref != "" {
+			return errf(http.StatusUnprocessableEntity, "invalid", "%s does not take a ref", name)
 		}
-		vals, err := action.Params.Validate(req.Params)
-		if err != nil {
-			return errf(http.StatusUnprocessableEntity, "invalid_params", "%v", err)
-		}
-		job.Params = vals
+	default:
 		job.Ref = req.Ref
-		if action.Repo == "" {
-			if job.Ref != "" {
-				return errf(http.StatusUnprocessableEntity, "invalid", "%s does not take a ref", name)
-			}
-		} else if job.Ref == "" {
+		if job.Ref == "" {
 			job.Ref = server.src.DefaultRef(action.Repo)
 		}
 	}
 
-	// Commands without a repo have no ref to check.
+	// Actions without a repo have no ref to check.
 	if action.Repo != "" && (!source.ValidRef(job.Ref) || !action.AllowedRefs.Match(job.Ref)) {
 		return deny(errf(http.StatusUnprocessableEntity, "ref_not_allowed", "ref %q is not allowed for %s", job.Ref, name))
 	}
-	if action.RefMatchRequired() && claims["ref"] != job.Ref {
+	if action.RequireRefMatch && claims["ref"] != job.Ref {
 		return deny(errf(http.StatusForbidden, "ref_mismatch", "token ref %q does not match %q", claims["ref"], job.Ref))
 	}
 
@@ -250,39 +244,27 @@ func (server *Server) submit(writer http.ResponseWriter, request *http.Request, 
 	return nil
 }
 
-// fromPlan fills an apply job from the plan job it applies, after checking the plan is usable.
-func (server *Server) fromPlan(ctx context.Context, claims policy.Claims, action *config.Action, req *submitRequest, job *jobs.Job) error {
-	if req.PlanJobID == "" {
-		return errf(http.StatusUnprocessableEntity, "plan_required", "%s requires plan_job_id", action.Name)
+// useInput points a job at the earlier job whose output it reads, and runs it at that job's commit.
+func (server *Server) useInput(ctx context.Context, claims policy.Claims, action *config.Action, req *submitRequest, job *jobs.Job) error {
+	if req.InputJobID == "" {
+		return errf(http.StatusUnprocessableEntity, "input_required", "%s requires input_job_id", action.Name)
 	}
-	if len(req.Params) > 0 {
-		return errf(http.StatusUnprocessableEntity, "invalid_params", "%s takes its params from the plan", action.Name)
-	}
-	plan, err := server.store.Get(ctx, req.PlanJobID)
-	if errors.Is(err, jobs.ErrNotFound) || (err == nil && !server.canSee(claims, plan)) {
-		return errf(http.StatusNotFound, "not_found", "plan job not found")
+	input, err := server.store.Get(ctx, req.InputJobID)
+	if errors.Is(err, jobs.ErrNotFound) || (err == nil && !server.canSee(claims, input)) {
+		return errf(http.StatusNotFound, "not_found", "input job not found")
 	}
 	if err != nil {
 		return err
 	}
 	switch {
-	case plan.Action != action.FromPlan:
-		return errf(http.StatusConflict, "plan_mismatch", "job %s is %s, not %s", plan.ID, plan.Action, action.FromPlan)
-	case plan.Status != jobs.Succeeded:
-		return errf(http.StatusConflict, "plan_not_succeeded", "plan job is %s", plan.Status)
-	case plan.FinishedAt == nil || time.Since(*plan.FinishedAt) > server.cfg.Server.PlanMaxAge.Duration:
-		return errf(http.StatusConflict, "plan_expired", "plan is older than %s", server.cfg.Server.PlanMaxAge.Duration)
-	case req.Ref != "" && req.Ref != plan.Ref:
-		return errf(http.StatusConflict, "plan_mismatch", "plan was made from %s, not %s", plan.Ref, req.Ref)
+	case input.Action != action.InputFrom:
+		return errf(http.StatusConflict, "input_mismatch", "job %s is %s, not %s", input.ID, input.Action, action.InputFrom)
+	case input.Status != jobs.Succeeded:
+		return errf(http.StatusConflict, "input_not_succeeded", "input job is %s", input.Status)
+	case req.Ref != "" && req.Ref != input.Ref:
+		return errf(http.StatusConflict, "input_mismatch", "input job ran %s, not %s", input.Ref, req.Ref)
 	}
-	used, err := server.store.PlanConsumed(ctx, plan.ID)
-	if err != nil {
-		return err
-	}
-	if used {
-		return errf(http.StatusConflict, "plan_consumed", "plan %s was already applied or is being applied", plan.ID)
-	}
-	job.PlanJobID, job.Ref, job.CommitSHA, job.Params = plan.ID, plan.Ref, plan.CommitSHA, plan.Params
+	job.InputJobID, job.Ref, job.CommitSHA = input.ID, input.Ref, input.CommitSHA
 	return nil
 }
 
@@ -309,21 +291,6 @@ func (server *Server) getLogs(writer http.ResponseWriter, request *http.Request,
 	writer.Header().Set("X-Next-Offset", strconv.FormatInt(next, 10))
 	writer.Header().Set("X-Job-Status", string(job.Status))
 	writer.Write(chunk)
-	return nil
-}
-
-func (server *Server) getPlanJSON(writer http.ResponseWriter, request *http.Request, claims policy.Claims, job *jobs.Job) error {
-	action, ok := server.cfg.Actions[job.Action]
-	if !ok || action.Tool != "terraform" || action.Op != "plan" || job.Status != jobs.Succeeded {
-		return errf(http.StatusNotFound, "not_found", "no plan artifact for this job")
-	}
-	planFile, err := os.Open(filepath.Join(server.mgr.JobDir(job.ID), tools.PlanJSONFile))
-	if err != nil {
-		return errf(http.StatusNotFound, "not_found", "no plan artifact for this job")
-	}
-	defer planFile.Close()
-	writer.Header().Set("Content-Type", "application/json")
-	http.ServeContent(writer, request, "plan.json", time.Time{}, planFile)
 	return nil
 }
 

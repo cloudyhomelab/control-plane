@@ -41,4 +41,4 @@ jobs:
           server: ${{ env.CP_SERVER }}
           audience: ${{ env.CP_AUDIENCE }}
           action: network.apply
-          plan-job: ${{ needs.plan.outputs.job_id }}
+          input-job: ${{ needs.plan.outputs.job_id }}

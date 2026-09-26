@@ -34,7 +34,6 @@ func setup(t *testing.T, mode string, maxJobs int) *env {
 	self, _ := os.Executable()
 	cfg, err := config.Parse([]byte(`
 server: { oidc_audience: aud, allowed_org: cloudyhome, cancel_grace: 2s, max_concurrent_jobs: ` + itoa(maxJobs) + ` }
-tools: { terraform: { path: ` + self + ` } }
 repos: { infra: { url: ` + origin + ` } }
 env_profiles:
   fake:
@@ -42,8 +41,6 @@ env_profiles:
     set: { ` + testutil.FakeToolEnv + `: "1" }
 actions:
   net.plan:
-    tool: terraform
-    op: plan
     repo: infra
     dir: tf
     env_profile: fake
@@ -51,11 +48,15 @@ actions:
     timeout: 20s
     allowed_refs: ["refs/heads/*"]
     params: { region: { type: enum, values: [eu] } }
-    vars: { region: "{{ .region }}" }
+    steps:
+      - [` + self + `, init, -input=false]
+      - [` + self + `, plan, -input=false, "-out={{ .job_dir }}/tfplan", "-var=region={{ .region }}"]
     allow: [{ repository: cloudyhome/infra }]
   net.apply:
-    from_plan: net.plan
+    input_from: net.plan
     allowed_refs: ["refs/heads/main"]
+    steps:
+      - [` + self + `, apply, "{{ .input_dir }}/tfplan"]
     allow: [{ repository: cloudyhome/infra }]
 `))
 	if err != nil {
@@ -81,7 +82,7 @@ actions:
 
 func itoa(number int) string { return strconv.Itoa(number) }
 
-func (testEnv *env) submit(t *testing.T, action, planID string) *Job {
+func (testEnv *env) submit(t *testing.T, action, inputJobID string) *Job {
 	t.Helper()
 	sha, err := testEnv.src.Resolve(context.Background(), "infra", "refs/heads/main")
 	if err != nil {
@@ -89,7 +90,7 @@ func (testEnv *env) submit(t *testing.T, action, planID string) *Job {
 	}
 	job := &Job{
 		ID: NewID(), Action: action, Status: Queued, Params: map[string]string{"region": "eu"},
-		Ref: "refs/heads/main", CommitSHA: sha, PlanJobID: planID, LockKey: testEnv.cfg.Actions[action].Lock,
+		Ref: "refs/heads/main", CommitSHA: sha, InputJobID: inputJobID, LockKey: testEnv.cfg.Actions[action].Lock,
 		Repository: "cloudyhome/infra", Caller: policy.Claims{"repository": "cloudyhome/infra"}, CreatedAt: time.Now(),
 	}
 	if action == "net.apply" {
@@ -135,7 +136,7 @@ func TestPlanThenApply(t *testing.T) {
 		t.Errorf("plan job = %+v", planJob)
 	}
 	log := testEnv.log(plan.ID)
-	for _, want := range []string{"fake init -input=false", "fake plan -input=false", "-var-file=", "secret is ***", "job succeeded"} {
+	for _, want := range []string{"fake init -input=false", "fake plan -input=false", "-var=region=eu", "secret is ***", "job succeeded"} {
 		if !strings.Contains(log, want) {
 			t.Errorf("log missing %q:\n%s", want, log)
 		}
@@ -143,8 +144,8 @@ func TestPlanThenApply(t *testing.T) {
 	if strings.Contains(log, "hunter2") {
 		t.Error("secret leaked into log")
 	}
-	if planJSON, _ := os.ReadFile(filepath.Join(testEnv.mgr.JobDir(plan.ID), "plan.json")); !strings.Contains(string(planJSON), "format_version") {
-		t.Errorf("plan.json = %q", planJSON)
+	if _, err := os.Stat(filepath.Join(testEnv.mgr.JobDir(plan.ID), "tfplan")); err != nil {
+		t.Errorf("plan file not written: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(testEnv.mgr.JobDir(plan.ID), "src")); !os.IsNotExist(err) {
 		t.Error("worktree should be removed after job")
@@ -154,9 +155,6 @@ func TestPlanThenApply(t *testing.T) {
 	testEnv.wait(t, apply.ID, Succeeded)
 	if log := testEnv.log(apply.ID); !strings.Contains(log, "Apply complete!") {
 		t.Errorf("apply log:\n%s", log)
-	}
-	if used, _ := testEnv.store.PlanConsumed(context.Background(), plan.ID); !used {
-		t.Error("plan should be consumed")
 	}
 }
 
