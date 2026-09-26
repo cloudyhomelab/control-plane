@@ -513,7 +513,7 @@ GitHub-hosted runners call the server from the internet, so it needs a public HT
 Example with Caddy (automatic TLS):
 
 ```
-controlplane.cloudyhome.example {
+controlplane.cloudyhome.net {
     reverse_proxy 127.0.0.1:8080
 }
 ```
@@ -527,7 +527,7 @@ In `catalog.yml`:
 
 ```yaml
 server:
-  oidc_audience: https://controlplane.cloudyhome.example   # any string; must match the workflow
+  oidc_audience: controlplane_cloudyhome   # any string; must match the workflow
   allowed_org: cloudyhome
 ```
 
@@ -581,8 +581,8 @@ jobs:
     steps:
       - uses: cloudyhome/controlplane/action@main
         with:
-          server: https://controlplane.cloudyhome.example
-          audience: https://controlplane.cloudyhome.example
+          server: https://controlplane.cloudyhome.net
+          audience: controlplane_cloudyhome
           action: host.uptime
 ```
 
@@ -596,8 +596,8 @@ jobs:
     steps:
       - uses: cloudyhome/controlplane/action@main
         with:
-          server: https://controlplane.cloudyhome.example
-          audience: https://controlplane.cloudyhome.example
+          server: https://controlplane.cloudyhome.net
+          audience: controlplane_cloudyhome
           action: host.disk
           params: |
             mount=/tmp
@@ -610,9 +610,9 @@ isn't allowed, the step fails with `HTTP 403 forbidden: caller may not invoke ho
 
 ### Terraform plan then apply
 
-`examples/workflows/network.yml` shows the full pattern: a `plan` job on every push and PR,
+`examples/workflows/homelab.yml` shows the full pattern: a `plan` job on every push and PR,
 and an `apply` job on main that runs in the `production` environment and passes the plan's
-`job_id` as `input-job`. How the server checks and runs the apply is described under
+`job_id` as `input-job` to `homelab.apply`. How the server checks and runs the apply is described under
 "Chaining two actions" in section 2. Reviewers read the plan in the plan job's log.
 
 ## 7. Troubleshooting

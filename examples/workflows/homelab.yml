@@ -14,8 +14,8 @@ permissions:
   contents: read
 
 env:
-  CP_SERVER: https://controlplane.example.com
-  CP_AUDIENCE: https://controlplane.example.com
+  CP_SERVER: https://controlplane.cloudyhome.net
+  CP_AUDIENCE: controlplane_cloudyhome
 
 jobs:
   plan:

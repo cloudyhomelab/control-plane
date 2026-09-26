@@ -1,16 +1,11 @@
 server:
-  oidc_audience: https://controlplane.example.com
+  oidc_audience: controlplane_cloudyhome
   allowed_org: cloudyhome
   max_concurrent_jobs: 4
-  admins:
-    - repository: cloudyhome/infra
-      job_workflow_ref: "cloudyhome/infra/.github/workflows/admin.yml@refs/heads/main"
 
 repos:
-  # Public repo: plain HTTPS, no credentials. TLS verifies github.com.
   homelab_public:
     url: https://github.com/cloudyhome/homelab.git
-  # Private repo: SSH with a read-only deploy key added to that one repo.
   homelab_private:
     url: git@github.com:cloudyhome/homelab.git
     deploy_key_file: /etc/controlplane/keys/homelab
