@@ -1,0 +1,40 @@
+name: check
+
+on: push
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Format
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "Not gofmt'ed:"; echo "$unformatted"; exit 1
+          fi
+      - name: Build
+        run: go build ./...
+      # vet also compiles the _test.go files, which build skips
+      - name: Vet
+        run: go vet ./...
+
+  # The single required status check; add every new job to needs.
+  all-checks-passed:
+    if: always()
+    needs: [check]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every job to succeed
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          for result in $RESULTS; do
+            [ "$result" = success ] || { echo "a required job ended with: $result"; exit 1; }
+          done
