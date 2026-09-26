@@ -6,6 +6,7 @@ tasks:
 
   fmt:
     desc: Format all Go files in place
+    silent: true
     cmds:
       - gofmt -w .
 
@@ -20,24 +21,41 @@ tasks:
         fi
 
   build:
-    desc: Build controlplane and cpctl into bin/
+    desc: Build controlplane and cpctl for every release platform into bin/<os>-<arch>-<cmd>
+    silent: true
     cmds:
-      - CGO_ENABLED=0 go build -trimpath -ldflags=-s -o bin/controlplane ./cmd/controlplane
-      - CGO_ENABLED=0 go build -trimpath -ldflags=-s -o bin/cpctl ./cmd/cpctl
+      - for:
+          matrix:
+            OS: [linux]
+            ARCH: [amd64, arm64]
+        cmd: |
+          for cmd in controlplane cpctl; do
+            CGO_ENABLED=0 GOOS={{.ITEM.OS}} GOARCH={{.ITEM.ARCH}} go build -trimpath -ldflags=-s -o bin/{{.ITEM.OS}}-{{.ITEM.ARCH}}-$cmd ./cmd/$cmd
+          done
+
+  clean:
+    desc: Remove build output in bin/
+    silent: true
+    cmds:
+      - rm -rf bin
 
   vet:
     desc: Report suspicious code (bad printf args, unreachable code, copied locks, ...) in all packages and tests
+    silent: true
     cmds:
       - go vet ./...
 
   test:
     desc: Run the tests
+    silent: true
     cmds:
       - go test ./...
 
   check:
     desc: Everything CI runs
+    silent: true
     cmds:
+      - task: clean
       - task: fmt:check
       - task: build
       - task: vet
