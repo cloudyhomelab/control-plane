@@ -1,0 +1,90 @@
+server:
+  oidc_audience: https://controlplane.example.com
+  allowed_org: cloudyhome
+  max_concurrent_jobs: 4
+  plan_max_age: 24h
+  admins:
+    - repository: cloudyhome/infra
+      job_workflow_ref: "cloudyhome/infra/.github/workflows/admin.yml@refs/heads/main"
+
+tools:
+  terraform: { path: /usr/local/bin/terraform }
+  packer: { path: /usr/local/bin/packer }
+  ansible: { path: /usr/bin/ansible-playbook }
+
+repos:
+  infra:
+    url: git@github.com:cloudyhome/infra.git
+    deploy_key_file: /etc/controlplane/keys/infra
+    known_hosts_file: /etc/controlplane/known_hosts
+
+env_profiles:
+  aws-prod:
+    pass_through: [AWS_REGION, AWS_CONFIG_FILE]
+    secrets: [AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY]
+
+actions:
+  network.plan:
+    description: Plan the shared network stack
+    tool: terraform
+    op: plan
+    repo: infra
+    dir: terraform/network
+    env_profile: aws-prod
+    allowed_refs: ["refs/heads/*", "refs/pull/*/merge"]
+    lock: tf-network
+    timeout: 30m
+    params:
+      region: { type: enum, values: [eu-west-1, us-east-1] }
+    vars:
+      region: "{{ .region }}"
+    allow:
+      - repository: cloudyhome/infra
+        event_name: [pull_request, push, workflow_dispatch]
+
+  network.apply:
+    description: Apply a reviewed network.plan
+    from_plan: network.plan
+    allowed_refs: ["refs/heads/main"]
+    allow:
+      - repository: cloudyhome/infra
+        ref: refs/heads/main
+        environment: production
+
+  base-image.build:
+    description: Build the base VM image
+    tool: packer
+    op: build
+    repo: infra
+    dir: packer/base
+    env_profile: aws-prod
+    allowed_refs: ["refs/heads/main", "refs/tags/*"]
+    lock: packer-base
+    timeout: 90m
+    params:
+      version: { type: string, pattern: '[0-9]+\.[0-9]+\.[0-9]+' }
+    vars:
+      version: "{{ .version }}"
+    allow:
+      - repository: cloudyhome/images
+
+  web.deploy:
+    description: Run the site playbook against one host group
+    tool: ansible
+    op: playbook
+    repo: infra
+    dir: ansible
+    playbook: site.yml
+    inventory: inventories/prod
+    allowed_refs: ["refs/heads/main"]
+    lock: ansible-prod
+    params:
+      limit: { type: enum, values: [web, api] }
+      app_version: { type: string, pattern: '[0-9a-f]{7,40}' }
+    args:
+      limit: "{{ .limit }}"
+    vars:
+      app_version: "{{ .app_version }}"
+    allow:
+      - repository: cloudyhome/app
+        environment: production

@@ -1,0 +1,28 @@
+[Unit]
+Description=Infra control plane
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=controlplane
+Group=controlplane
+# Cloud credentials for env_profiles live here, readable only by the service user.
+EnvironmentFile=-/etc/controlplane/env
+ExecStartPre=/usr/local/bin/controlplane -config /etc/controlplane/catalog.yml -check
+ExecStart=/usr/local/bin/controlplane -config /etc/controlplane/catalog.yml -data-dir /var/lib/controlplane -listen 127.0.0.1:8080
+StateDirectory=controlplane
+StateDirectoryMode=0750
+# SIGTERM makes the server SIGINT running tools; give terraform time to release state locks.
+KillMode=mixed
+TimeoutStopSec=90
+Restart=on-failure
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/var/lib/controlplane
+
+[Install]
+WantedBy=multi-user.target

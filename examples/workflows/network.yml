@@ -1,0 +1,44 @@
+# Example workflow in cloudyhome/infra: plan on every push/PR, apply on main behind the
+# production environment (so GitHub environment protection rules gate the apply).
+name: network
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  CP_SERVER: https://controlplane.example.com
+  CP_AUDIENCE: https://controlplane.example.com
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      job_id: ${{ steps.plan.outputs.job_id }}
+    steps:
+      - id: plan
+        uses: cloudyhome/controlplane/action@main
+        with:
+          server: ${{ env.CP_SERVER }}
+          audience: ${{ env.CP_AUDIENCE }}
+          action: network.plan
+          ref: ${{ github.ref }}
+          params: |
+            region=eu-west-1
+
+  apply:
+    if: github.ref == 'refs/heads/main'
+    needs: plan
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: cloudyhome/controlplane/action@main
+        with:
+          server: ${{ env.CP_SERVER }}
+          audience: ${{ env.CP_AUDIENCE }}
+          action: network.apply
+          plan-job: ${{ needs.plan.outputs.job_id }}

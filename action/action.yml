@@ -1,0 +1,61 @@
+name: Control plane
+description: Run a named action on the infra control plane and stream its log.
+inputs:
+  server:
+    description: Control plane base URL
+    required: true
+  audience:
+    description: OIDC audience the control plane expects (server.oidc_audience)
+    required: true
+  action:
+    description: Catalog action name, e.g. network.plan
+    required: true
+  params:
+    description: One key=value per line
+    required: false
+    default: ""
+  ref:
+    description: Git ref to run (defaults to the action's default ref)
+    required: false
+    default: ""
+  plan-job:
+    description: Plan job id, for apply actions
+    required: false
+    default: ""
+outputs:
+  job_id:
+    description: Control plane job id
+    value: ${{ steps.run.outputs.job_id }}
+  status:
+    description: Final job status
+    value: ${{ steps.run.outputs.status }}
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-go@v5
+      with:
+        go-version-file: ${{ github.action_path }}/../go.mod
+        cache: false
+    - name: Build cpctl
+      shell: bash
+      working-directory: ${{ github.action_path }}/..
+      run: go build -trimpath -o "$RUNNER_TEMP/cpctl" ./cmd/cpctl
+    - id: run
+      name: Run ${{ inputs.action }}
+      shell: bash
+      env:
+        CONTROLPLANE_URL: ${{ inputs.server }}
+        CONTROLPLANE_AUDIENCE: ${{ inputs.audience }}
+        CP_ACTION: ${{ inputs.action }}
+        CP_PARAMS: ${{ inputs.params }}
+        CP_REF: ${{ inputs.ref }}
+        CP_PLAN_JOB: ${{ inputs.plan-job }}
+      # Inputs travel via env, never interpolated into the script.
+      run: |
+        args=()
+        while IFS= read -r line; do
+          [[ -n "$line" ]] && args+=(-p "$line")
+        done <<< "$CP_PARAMS"
+        [[ -n "$CP_REF" ]] && args+=(-ref "$CP_REF")
+        [[ -n "$CP_PLAN_JOB" ]] && args+=(-plan-job "$CP_PLAN_JOB")
+        "$RUNNER_TEMP/cpctl" run "${args[@]}" "$CP_ACTION"
