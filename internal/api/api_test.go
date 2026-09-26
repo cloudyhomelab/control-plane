@@ -57,6 +57,12 @@ actions:
     from_plan: net.plan
     allowed_refs: ["refs/heads/main"]
     allow: [{ repository: cloudyhome/infra, environment: production }]
+  host.check:
+    tool: command
+    command: [` + self + `, check, "{{ .target }}"]
+    env_profile: fake
+    params: { target: { type: enum, values: [disk, mem] } }
+    allow: [{ repository: cloudyhome/app }]
 `))
 	if err != nil {
 		t.Fatal(err)
@@ -230,4 +236,21 @@ func TestCancelAPI(t *testing.T) {
 	if done := h.waitDone(infraPush, j.ID); done.Status != jobs.Cancelled {
 		t.Fatalf("status %s", done.Status)
 	}
+}
+
+func TestCommandAction(t *testing.T) {
+	h := newHarness(t, "ok")
+	j := decodeJob(t, h.expect(202, otherRepo, "POST", "/v1/actions/host.check/jobs", `{"params":{"target":"disk"}}`))
+	if j.Ref != "" || j.CommitSHA != "" {
+		t.Errorf("command job should have no ref: %+v", j)
+	}
+	if done := h.waitDone(otherRepo, j.ID); done.Status != jobs.Succeeded {
+		t.Fatalf("status %s", done.Status)
+	}
+	if _, b := h.do(otherRepo, "GET", "/v1/jobs/"+j.ID+"/logs", ""); !strings.Contains(string(b), "fake check disk") {
+		t.Errorf("log: %s", b)
+	}
+	h.expect(422, otherRepo, "POST", "/v1/actions/host.check/jobs", `{"ref":"refs/heads/main","params":{"target":"disk"}}`)
+	h.expect(422, otherRepo, "POST", "/v1/actions/host.check/jobs", `{"params":{"target":"/etc/passwd"}}`)
+	h.expect(403, infraPush, "POST", "/v1/actions/host.check/jobs", `{"params":{"target":"disk"}}`)
 }

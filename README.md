@@ -8,6 +8,8 @@ with typed parameters, authenticated by GitHub OIDC tokens.
 
 - **Catalog** (`examples/catalog.yml`): each action names a tool, an operation, a repo and
   directory, typed `params`, which refs it may run, and `allow` rules over OIDC claims.
+  Tools are `terraform`, `packer`, `ansible`, and `command` (a fixed argv such as
+  `/usr/bin/uptime`, optionally without a repo).
 - **Auth**: the runner sends its GitHub OIDC token. The server checks signature, issuer,
   audience and `repository_owner`, then matches the action's `allow` rules.
 - **Code**: the server clones the repo with its own deploy key and runs the exact commit
@@ -56,9 +58,10 @@ For local testing, `-insecure-dev-auth` (loopback only) accepts an unsigned base
 object of claims as the bearer token:
 
 ```sh
+go run ./cmd/controlplane -config examples/dev-catalog.yml -data-dir ./data -insecure-dev-auth &
 export CONTROLPLANE_URL=http://127.0.0.1:8080
-export CONTROLPLANE_TOKEN=$(printf '{"repository":"cloudyhome/app","repository_owner":"cloudyhome","ref":"refs/heads/main"}' | base64 -w0 | tr '+/' '-_' | tr -d '=')
-go run ./cmd/cpctl run -p limit=web -p app_version=abc1234 web.deploy
+export CONTROLPLANE_TOKEN=$(go run ./cmd/cpctl dev-token repository=cloudyhome/infra ref=refs/heads/main)
+go run ./cmd/cpctl run host.uptime
 ```
 
 ## Tests

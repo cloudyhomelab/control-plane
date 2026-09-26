@@ -88,3 +88,11 @@ actions:
     allow:
       - repository: cloudyhome/app
         environment: production
+
+  host.uptime:
+    description: Show how long the control plane host has been up
+    tool: command
+    command: [/usr/bin/uptime, --pretty]
+    timeout: 1m
+    allow:
+      - repository: cloudyhome/infra

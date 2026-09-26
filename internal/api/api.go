@@ -205,19 +205,24 @@ func (s *Server) submit(w http.ResponseWriter, r *http.Request, c policy.Claims)
 		}
 		job.Params = vals
 		job.Ref = req.Ref
-		if job.Ref == "" {
+		if a.Repo == "" {
+			if job.Ref != "" {
+				return errf(http.StatusUnprocessableEntity, "invalid", "%s does not take a ref", name)
+			}
+		} else if job.Ref == "" {
 			job.Ref = s.src.DefaultRef(a.Repo)
 		}
 	}
 
-	if !source.ValidRef(job.Ref) || !a.AllowedRefs.Match(job.Ref) {
+	// Commands without a repo have no ref to check.
+	if a.Repo != "" && (!source.ValidRef(job.Ref) || !a.AllowedRefs.Match(job.Ref)) {
 		return deny(errf(http.StatusUnprocessableEntity, "ref_not_allowed", "ref %q is not allowed for %s", job.Ref, name))
 	}
 	if a.RefMatchRequired() && c["ref"] != job.Ref {
 		return deny(errf(http.StatusForbidden, "ref_mismatch", "token ref %q does not match %q", c["ref"], job.Ref))
 	}
 
-	if job.CommitSHA == "" {
+	if a.Repo != "" && job.CommitSHA == "" {
 		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
 		defer cancel()
 		sha, err := s.src.Resolve(ctx, a.Repo, job.Ref)

@@ -4,6 +4,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -25,6 +26,7 @@ const usage = `usage:
   cpctl status JOB_ID
   cpctl logs JOB_ID
   cpctl cancel JOB_ID
+  cpctl dev-token key=value...   token for a server started with -insecure-dev-auth
 
 environment:
   CONTROLPLANE_URL        server base URL (required)
@@ -37,11 +39,15 @@ func main() {
 		fmt.Fprint(os.Stderr, usage)
 		os.Exit(2)
 	}
+	cmd, args := os.Args[1], os.Args[2:]
+	if cmd == "dev-token" {
+		devToken(args)
+		return
+	}
 	c, err := newClient()
 	if err != nil {
 		fatal(err)
 	}
-	cmd, args := os.Args[1], os.Args[2:]
 	switch cmd {
 	case "actions":
 		err = c.printJSON("GET", "/v1/actions", nil)
@@ -93,7 +99,9 @@ func newClient() (*client, error) {
 		return nil, errors.New("CONTROLPLANE_URL is not set")
 	}
 	return &client{
-		base: base, audience: os.Getenv("CONTROLPLANE_AUDIENCE"), static: os.Getenv("CONTROLPLANE_TOKEN"),
+		base: base,
+		audience: os.Getenv("CONTROLPLANE_AUDIENCE"),
+		static: os.Getenv("CONTROLPLANE_TOKEN"),
 		http: &http.Client{Timeout: 3 * time.Minute},
 	}, nil
 }
@@ -207,6 +215,7 @@ func (c *client) run(args []string) (int, error) {
 	ref := fs.String("ref", "", "git ref (default: the action's default)")
 	planJob := fs.String("plan-job", "", "plan job to apply")
 	noWait := fs.Bool("no-wait", false, "print the job id and return immediately")
+
 	// Accept flags before and after the action name.
 	var action string
 	for fs.Parse(args); fs.NArg() > 0; fs.Parse(args) {
@@ -238,7 +247,11 @@ func (c *client) run(args []string) (int, error) {
 	if err := json.Unmarshal(b, &j); err != nil {
 		return 0, err
 	}
-	fmt.Fprintf(os.Stderr, "job %s: %s at %s (%s)\n", j.ID, action, j.Ref, j.CommitSHA)
+	if j.Ref != "" {
+		fmt.Fprintf(os.Stderr, "job %s: %s at %s (%s)\n", j.ID, action, j.Ref, j.CommitSHA)
+	} else {
+		fmt.Fprintf(os.Stderr, "job %s: %s\n", j.ID, action)
+	}
 	setOutput("job_id", j.ID)
 	if *noWait {
 		fmt.Println(j.ID)
@@ -293,6 +306,26 @@ func (c *client) stream(ctx context.Context, id string) (*job, error) {
 	}
 	var j job
 	return &j, json.Unmarshal(b, &j)
+}
+
+// devToken prints the unsigned claims token that -insecure-dev-auth accepts.
+func devToken(args []string) {
+	claims := map[string]string{}
+	for _, a := range args {
+		k, v, ok := strings.Cut(a, "=")
+		if !ok {
+			fatal(fmt.Errorf("want key=value, got %q", a))
+		}
+		claims[k] = v
+	}
+	if claims["repository"] == "" {
+		fatal(errors.New("repository=OWNER/NAME is required"))
+	}
+	if claims["repository_owner"] == "" {
+		claims["repository_owner"], _, _ = strings.Cut(claims["repository"], "/")
+	}
+	b, _ := json.Marshal(claims)
+	fmt.Println(base64.RawURLEncoding.EncodeToString(b))
 }
 
 func setOutput(k, v string) {

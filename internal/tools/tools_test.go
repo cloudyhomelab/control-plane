@@ -99,3 +99,39 @@ func TestAnsible(t *testing.T) {
 		t.Errorf("dir = %s", steps[0].Dir)
 	}
 }
+
+func TestCommand(t *testing.T) {
+	c, err := config.Parse([]byte(`
+server: { oidc_audience: aud, allowed_org: o }
+repos: { infra: { url: /x } }
+actions:
+  host.echo:
+    tool: command
+    command: [/bin/echo, "hello {{ .who }}"]
+    params: { who: { type: enum, values: ["a b"] } }
+    allow: [{repository: r}]
+  repo.ls:
+    tool: command
+    repo: infra
+    dir: sub
+    command: [/bin/ls]
+    allowed_refs: [refs/heads/main]
+    allow: [{repository: r}]
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	job := t.TempDir()
+	steps, err := Prepare(Input{Action: c.Actions["host.echo"], Params: map[string]string{"who": "a b"}, JobDir: job})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A value with a space stays one argv element.
+	if !reflect.DeepEqual(steps[0].Argv, []string{"/bin/echo", "hello a b"}) || steps[0].Dir != job {
+		t.Errorf("step = %+v", steps[0])
+	}
+	steps, _ = Prepare(Input{Action: c.Actions["repo.ls"], SrcDir: "/src", JobDir: job})
+	if steps[0].Dir != "/src/sub" {
+		t.Errorf("dir = %s", steps[0].Dir)
+	}
+}

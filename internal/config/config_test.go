@@ -63,3 +63,41 @@ func TestRejects(t *testing.T) {
 		}
 	}
 }
+
+func TestCommand(t *testing.T) {
+	c, err := Parse([]byte(base + `
+  host.uptime: { tool: command, command: [/usr/bin/uptime], allow: [{repository: r}] }
+  host.ping:
+    tool: command
+    command: [/usr/bin/ping, -c, "{{ .count }}", "{{ .host }}"]
+    params:
+      count: { type: int, min: 1, max: 5, default: "1" }
+      host: { type: enum, values: [a.example, b.example] }
+    allow: [{repository: r}]
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Actions["host.uptime"].Op != "run" {
+		t.Error("op should default to run")
+	}
+	argv, err := c.Actions["host.ping"].RenderCommand(map[string]string{"count": "3", "host": "a.example"})
+	if err != nil || strings.Join(argv, " ") != "/usr/bin/ping -c 3 a.example" {
+		t.Errorf("argv = %q, %v", argv, err)
+	}
+
+	bad := map[string]string{
+		"relative binary":   `a: { tool: command, command: [uptime], allow: [{repository: r}] }`,
+		"templated binary":  `a: { tool: command, command: ["/bin/{{ .x }}"], params: { x: { type: enum, values: [ls] } }, allow: [{repository: r}] }`,
+		"empty command":     `a: { tool: command, allow: [{repository: r}] }`,
+		"refs without repo": `a: { tool: command, command: [/usr/bin/uptime], allowed_refs: [x], allow: [{repository: r}] }`,
+		"undeclared param":  `a: { tool: command, command: [/bin/echo, "{{ .nope }}"], allow: [{repository: r}] }`,
+		"command on other":  `a: { tool: terraform, op: plan, repo: infra, allowed_refs: [x], command: [/bin/x], allow: [{repository: r}] }`,
+		"repo needs refs":   `a: { tool: command, repo: infra, command: [/bin/ls], allow: [{repository: r}] }`,
+	}
+	for name, action := range bad {
+		if _, err := Parse([]byte(base + "\n  " + action)); err == nil {
+			t.Errorf("%s: expected error", name)
+		}
+	}
+}

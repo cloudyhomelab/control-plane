@@ -140,16 +140,21 @@ func (m *Manager) execute(ctx context.Context, j *Job, a *config.Action, lw *log
 	ctx, cancel := context.WithTimeoutCause(ctx, a.Timeout.Duration, errTimeout)
 	defer cancel()
 
-	lw.Line(fmt.Sprintf("action %s, ref %s, commit %s", j.Action, j.Ref, j.CommitSHA))
-	srcDir := filepath.Join(m.JobDir(j.ID), "src")
-	if err := m.src.Checkout(ctx, a.Repo, j.CommitSHA, srcDir); err != nil {
-		return ctxStatusOr(ctx, Failed), nil, err
-	}
-	defer func() {
-		if err := m.src.Remove(context.Background(), a.Repo, srcDir); err != nil {
-			slog.Warn("remove worktree", "job", j.ID, "err", err)
+	var srcDir string
+	if a.Repo != "" {
+		lw.Line(fmt.Sprintf("action %s, ref %s, commit %s", j.Action, j.Ref, j.CommitSHA))
+		srcDir = filepath.Join(m.JobDir(j.ID), "src")
+		if err := m.src.Checkout(ctx, a.Repo, j.CommitSHA, srcDir); err != nil {
+			return ctxStatusOr(ctx, Failed), nil, err
 		}
-	}()
+		defer func() {
+			if err := m.src.Remove(context.Background(), a.Repo, srcDir); err != nil {
+				slog.Warn("remove worktree", "job", j.ID, "err", err)
+			}
+		}()
+	} else {
+		lw.Line("action " + j.Action)
+	}
 
 	in := tools.Input{
 		Action: a, ToolPath: m.cfg.Tools[a.Tool].Path, Params: j.Params,

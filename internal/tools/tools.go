@@ -24,6 +24,7 @@ type Input struct {
 	Params   map[string]string
 	SrcDir   string
 	JobDir   string
+	// SrcDir is the repo checkout, or empty for a command action without a repo.
 	// PlanFile is the saved plan to apply (terraform apply only).
 	PlanFile string
 }
@@ -37,6 +38,9 @@ const (
 func Prepare(in Input) ([]Step, error) {
 	a := in.Action
 	dir := filepath.Join(in.SrcDir, a.Dir)
+	if in.SrcDir == "" {
+		dir = in.JobDir
+	}
 	vars, err := a.Render("vars", in.Params)
 	if err != nil {
 		return nil, err
@@ -84,6 +88,12 @@ func Prepare(in Input) ([]Step, error) {
 			step("init", "."),
 			step(append(append(args, varFile...), ".")...),
 		}, nil
+	case "command.run":
+		argv, err := a.RenderCommand(in.Params)
+		if err != nil {
+			return nil, err
+		}
+		return []Step{{Argv: argv, Dir: dir}}, nil
 	case "ansible.playbook", "ansible.check":
 		rendered, err := a.Render("args", in.Params)
 		if err != nil {

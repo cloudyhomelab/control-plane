@@ -9,7 +9,7 @@ FROM docker.io/library/debian:trixie-slim
 ARG TERRAFORM_VERSION=1.13.3
 ARG PACKER_VERSION=1.14.2
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates git openssh-client unzip curl ansible-core \
+ && apt-get install -y --no-install-recommends ca-certificates git openssh-client procps unzip curl ansible-core \
  && curl -fsSLo /tmp/tf.zip https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_amd64.zip \
  && curl -fsSLo /tmp/packer.zip https://releases.hashicorp.com/packer/${PACKER_VERSION}/packer_${PACKER_VERSION}_linux_amd64.zip \
  && unzip -d /usr/local/bin /tmp/tf.zip terraform \

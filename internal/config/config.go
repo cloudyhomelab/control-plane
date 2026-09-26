@@ -6,6 +6,7 @@ import (
 	"os"
 	"path"
 	"sort"
+	"strconv"
 	"strings"
 	"text/template"
 	"time"
@@ -79,6 +80,9 @@ type Action struct {
 	Inventory string            `yaml:"inventory"`
 	Args      map[string]string `yaml:"args"`
 
+	// Command only: fixed argv. Elements may be templates, each filling exactly one argv slot.
+	Command []string `yaml:"command"`
+
 	templates map[string]*template.Template
 }
 
@@ -87,6 +91,7 @@ var Ops = map[string][]string{
 	"terraform": {"plan", "apply", "validate"},
 	"packer":    {"build", "validate"},
 	"ansible":   {"playbook", "check"},
+	"command":   {"run"},
 }
 
 // AnsibleArgs maps the allowed ansible `args` keys to their flags.
@@ -160,7 +165,7 @@ func (c *Config) validate() error {
 		c.Tools = map[string]Tool{}
 	}
 	for tool := range Ops {
-		if c.Tools[tool].Path == "" {
+		if tool != "command" && c.Tools[tool].Path == "" {
 			c.Tools[tool] = Tool{Path: defaultBinary(tool)}
 		}
 	}
@@ -209,6 +214,9 @@ func (c *Config) actionNames() []string {
 }
 
 func (c *Config) validateAction(a *Action) error {
+	if a.Tool == "command" && a.Op == "" {
+		a.Op = "run"
+	}
 	ops, ok := Ops[a.Tool]
 	if !ok {
 		return fmt.Errorf("unknown tool %q", a.Tool)
@@ -219,8 +227,15 @@ func (c *Config) validateAction(a *Action) error {
 	if a.Tool == "terraform" && a.Op == "apply" {
 		return fmt.Errorf("terraform apply must use from_plan")
 	}
-	if _, ok := c.Repos[a.Repo]; !ok {
+	if a.Repo == "" && a.Tool == "command" {
+		// A command without a repo runs in an empty job dir; refs do not apply.
+		if a.Dir != "" || len(a.AllowedRefs) > 0 || a.RefMatchRequired() {
+			return fmt.Errorf("dir, allowed_refs and require_ref_match need a repo")
+		}
+	} else if _, ok := c.Repos[a.Repo]; !ok {
 		return fmt.Errorf("unknown repo %q", a.Repo)
+	} else if len(a.AllowedRefs) == 0 {
+		return fmt.Errorf("allowed_refs is required")
 	}
 	if a.EnvProfile != "" {
 		if _, ok := c.EnvProfiles[a.EnvProfile]; !ok {
@@ -245,8 +260,19 @@ func (c *Config) validateAction(a *Action) error {
 	} else if a.Playbook != "" || a.Inventory != "" || len(a.Args) > 0 {
 		return fmt.Errorf("playbook, inventory and args are ansible only")
 	}
-	if len(a.AllowedRefs) == 0 {
-		return fmt.Errorf("allowed_refs is required")
+	if a.Tool == "command" {
+		if len(a.Command) == 0 {
+			return fmt.Errorf("command is required")
+		}
+		// An absolute, literal binary means no PATH lookup and no parameter choosing what runs.
+		if !path.IsAbs(a.Command[0]) || strings.Contains(a.Command[0], "{{") {
+			return fmt.Errorf("command[0] must be a literal absolute path")
+		}
+		if len(a.Vars) > 0 {
+			return fmt.Errorf("vars are not supported for command; use templates in command")
+		}
+	} else if len(a.Command) > 0 {
+		return fmt.Errorf("command is only valid for tool command")
 	}
 	if err := validateRules(a.Allow); err != nil {
 		return err
@@ -352,7 +378,27 @@ func (a *Action) compileTemplates() error {
 	if err := compile("vars", a.Vars); err != nil {
 		return err
 	}
-	return compile("args", a.Args)
+	if err := compile("args", a.Args); err != nil {
+		return err
+	}
+	cmd := map[string]string{}
+	for i, v := range a.Command {
+		cmd[strconv.Itoa(i)] = v
+	}
+	return compile("command", cmd)
+}
+
+// RenderCommand returns the argv of a command action with validated parameter values.
+func (a *Action) RenderCommand(values map[string]string) ([]string, error) {
+	argv := make([]string, len(a.Command))
+	for i := range a.Command {
+		var b strings.Builder
+		if err := a.templates["command."+strconv.Itoa(i)].Execute(&b, values); err != nil {
+			return nil, err
+		}
+		argv[i] = b.String()
+	}
+	return argv, nil
 }
 
 // Render evaluates vars or args ("vars" or "args") with validated parameter values.
