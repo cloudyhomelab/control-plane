@@ -6,7 +6,7 @@ This guide walks through the control plane from the inside out:
 2. How catalog entries map to commands
 3. Adding and allowing a new command (`uptime`)
 4. Testing it by hand on your machine (no GitHub involved)
-5. Building and running the container
+5. Installing and running on the host
 6. Calling it from a GitHub Actions workflow
 7. Troubleshooting
 
@@ -173,7 +173,7 @@ Say you want workflows in `cloudyhome/infra` to be able to see how long the host
 
 ### Step 1: find the absolute path of the binary
 
-On the machine (or in the image) where the control plane runs:
+On the host where the control plane runs:
 
 ```sh
 command -v uptime      # /usr/bin/uptime on Arch and Debian
@@ -306,14 +306,13 @@ Every mistake (unknown field, relative path, template using an undeclared param,
 
 ### Step 6: make sure the binary exists where the server runs
 
-In the container that means the image must have it. `uptime` comes from `procps`, which is
-already in `deploy/Containerfile`. For other commands, add their package to the
-`apt-get install` line and rebuild (see section 5).
+Install it on the control plane host with the system package manager. `uptime` comes from
+`procps`, which is almost always there already.
 
 ### Step 7: reload
 
-The catalog is read at startup. Restart the service (`systemctl restart controlplane`, or
-restart the container). Jobs running at that moment get SIGINT and are marked cancelled.
+The catalog is read at startup. Restart the service (`systemctl restart controlplane`).
+Jobs running at that moment get SIGINT and are marked cancelled.
 
 ## 4. Testing by hand on your machine (no GitHub)
 
@@ -443,32 +442,43 @@ actions:
 Commit your changes first. The server runs committed code at the resolved commit, not your
 working tree.
 
-## 5. Building and running the container
+## 5. Installing and running on the host
 
-### Step 1: build the image
+The control plane runs directly on the host under systemd, not in a container. It exists for
+the jobs that can't run on a (containerised) GitHub runner: packer qemu builds need `/dev/kvm`,
+docker builds need the host's docker daemon, and so on. Putting the server in a container
+would bring those same limits back.
+
+### Step 1: build and install the binary
 
 From the repo root:
 
 ```sh
-podman build -f deploy/Containerfile -t controlplane:latest .
-# or: docker build -f deploy/Containerfile -t controlplane:latest .
+CGO_ENABLED=0 go build -trimpath -ldflags=-s -o controlplane ./cmd/controlplane
+sudo install -m 755 controlplane /usr/local/bin/controlplane
 ```
 
-The image has the `controlplane` binary, terraform and packer (versions pinned by the
-`TERRAFORM_VERSION`/`PACKER_VERSION` build args), ansible-core, git, ssh and procps.
-To change versions:
+Install the tools your catalog's `steps` call (terraform, packer, ansible, docker, git, ssh,
+...) with the host's package manager, and make sure the absolute paths in `steps` match
+`command -v` on this host.
+
+### Step 2: create the service user
 
 ```sh
-podman build -f deploy/Containerfile --build-arg TERRAFORM_VERSION=1.13.3 -t controlplane:latest .
+sudo useradd --system --home-dir /var/lib/controlplane --create-home controlplane
 ```
 
-Make sure the binary paths in your catalog's `steps` match the image:
-`/usr/local/bin/terraform`, `/usr/local/bin/packer`, `/usr/bin/ansible-playbook`.
-
-### Step 2: prepare the host directories
+Give it access to whatever the commands need, for example:
 
 ```sh
-sudo mkdir -p /etc/controlplane/keys /var/lib/controlplane
+sudo usermod -aG kvm controlplane      # packer qemu builds
+sudo usermod -aG docker controlplane   # docker builds (effectively root on the host)
+```
+
+### Step 3: prepare the config directory
+
+```sh
+sudo mkdir -p /etc/controlplane/keys
 sudo cp catalog.yml /etc/controlplane/catalog.yml
 ```
 
@@ -477,11 +487,13 @@ Deploy key, for repo-based actions. Create a read-only deploy key for each repo 
 
 ```sh
 sudo ssh-keygen -t ed25519 -N '' -C controlplane -f /etc/controlplane/keys/infra
+sudo chown controlplane: /etc/controlplane/keys/infra
 sudo cat /etc/controlplane/keys/infra.pub      # paste into GitHub as a deploy key
 ssh-keyscan github.com | sudo tee /etc/controlplane/known_hosts
 ```
 
-Credentials for commands go in an env file that only root can read:
+Credentials for commands go in an env file that only root can read (systemd reads it before
+dropping to the service user):
 
 ```sh
 sudo install -m 600 /dev/null /etc/controlplane/env
@@ -492,39 +504,30 @@ sudoedit /etc/controlplane/env
 
 A variable only reaches a command if an `env_profile` used by that action lists it.
 
-The image runs as a non-root `controlplane` user, so the data directory and keys must be
-readable by that UID. With rootless podman use `--userns=keep-id` or `chown` them to match.
-
-### Step 3: validate the catalog with the image
+### Step 4: validate the catalog
 
 ```sh
-podman run --rm -v /etc/controlplane:/etc/controlplane:ro,Z \
-  --entrypoint /usr/local/bin/controlplane controlplane:latest \
-  -config /etc/controlplane/catalog.yml -check
+sudo -u controlplane /usr/local/bin/controlplane -config /etc/controlplane/catalog.yml -check
 ```
 
-### Step 4: run it
+The unit also runs this before every start.
+
+### Step 5: install and start the unit
 
 ```sh
-podman run -d --name controlplane --restart unless-stopped \
-  -p 127.0.0.1:8080:8080 \
-  -v /etc/controlplane:/etc/controlplane:ro,Z \
-  -v /var/lib/controlplane:/var/lib/controlplane:Z \
-  --env-file /etc/controlplane/env \
-  --stop-timeout 90 \
-  controlplane:latest
+sudo cp deploy/controlplane.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now controlplane
+journalctl -u controlplane -f
 ```
 
-- The port is published on 127.0.0.1 only. Put a TLS reverse proxy in front (next step).
-- `--stop-timeout 90` gives terraform time to release state locks when the container stops.
-- Commands run inside the container, so `uptime` reports the host kernel's uptime but `df`
-  shows the container's filesystems. Mount what a command needs to see.
+- It listens on 127.0.0.1:8080 only. Put a TLS reverse proxy in front (next step).
+- `TimeoutStopSec=90` gives terraform time to release state locks when the service stops.
+- `ProtectSystem=strict` makes the filesystem read-only except `/var/lib/controlplane`. If a
+  command writes somewhere else (a packer output directory, say), add it to `ReadWritePaths=`
+  with `systemctl edit controlplane`.
 
-Without a container, `deploy/controlplane.service` is a hardened systemd unit for the same
-binary: install it to `/etc/systemd/system/`, create a `controlplane` user, then
-`systemctl enable --now controlplane`.
-
-### Step 5: expose it over HTTPS
+### Step 6: expose it over HTTPS
 
 GitHub-hosted runners call the server from the internet, so it needs a public HTTPS name.
 Example with Caddy (automatic TLS):
@@ -538,7 +541,7 @@ controlplane.cloudyhome.net {
 If you'd rather not expose it, use self-hosted runners on the same network and point
 `CONTROLPLANE_URL` at the internal address. Only `/healthz` is unauthenticated.
 
-### Step 6: set the audience
+### Step 7: set the audience
 
 In `catalog.yml`:
 

@@ -1,3 +1,4 @@
+# Runs on the host, not in a container: jobs here need host access (/dev/kvm, docker daemon).
 [Unit]
 Description=Infra control plane
 After=network-online.target

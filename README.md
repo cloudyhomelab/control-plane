@@ -109,8 +109,6 @@ read-only. The server can then read that repo and nothing else.
    sudo chmod 600 /etc/controlplane/keys/REPO
    ```
 
-   In the container, the key must be owned by the image's `controlplane` user instead.
-
 5. Add the entry:
 
    ```yaml
@@ -169,7 +167,9 @@ go run ./cmd/controlplane -config examples/catalog.yml -check      # validate ca
 go run ./cmd/controlplane -config catalog.yml -data-dir ./data     # serve on 127.0.0.1:8080
 ```
 
-Put it behind a TLS reverse proxy. `deploy/` has a systemd unit and a Containerfile.
+Run it on the host with `deploy/controlplane.service`, not in a container: it exists for jobs
+that need host access (packer qemu builds need `/dev/kvm`, docker builds need the docker daemon)
+and so can't run on a containerised runner. Put it behind a TLS reverse proxy.
 Cloud credentials go in the server environment (`/etc/controlplane/env`) and reach a command
 only through the action's `env_profile`.
 
