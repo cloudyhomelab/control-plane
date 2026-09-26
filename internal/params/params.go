@@ -16,110 +16,110 @@ type Spec struct {
 	Max     *int     `yaml:"max,omitempty" json:"max,omitempty"`
 	Default *string  `yaml:"default,omitempty" json:"default,omitempty"`
 
-	re *regexp.Regexp
+	regex *regexp.Regexp
 }
 
 // Compile checks the spec and prepares it for validation.
-func (s *Spec) Compile() error {
-	switch s.Type {
+func (spec *Spec) Compile() error {
+	switch spec.Type {
 	case "enum":
-		if len(s.Values) == 0 {
+		if len(spec.Values) == 0 {
 			return fmt.Errorf("enum needs values")
 		}
 	case "string":
 		// Free-form strings are not allowed: a pattern bounds what a caller can inject.
-		if s.Pattern == "" {
+		if spec.Pattern == "" {
 			return fmt.Errorf("string needs a pattern")
 		}
-		re, err := regexp.Compile(`^(?:` + s.Pattern + `)$`)
+		compiled, err := regexp.Compile(`^(?:` + spec.Pattern + `)$`)
 		if err != nil {
 			return fmt.Errorf("pattern: %w", err)
 		}
-		s.re = re
+		spec.regex = compiled
 	case "int":
-		if s.Min != nil && s.Max != nil && *s.Min > *s.Max {
+		if spec.Min != nil && spec.Max != nil && *spec.Min > *spec.Max {
 			return fmt.Errorf("min > max")
 		}
 	case "bool":
 	default:
-		return fmt.Errorf("unknown type %q", s.Type)
+		return fmt.Errorf("unknown type %q", spec.Type)
 	}
-	if s.Default != nil {
-		if _, err := s.check(*s.Default); err != nil {
+	if spec.Default != nil {
+		if _, err := spec.check(*spec.Default); err != nil {
 			return fmt.Errorf("default: %w", err)
 		}
 	}
 	return nil
 }
 
-func (s *Spec) check(v string) (string, error) {
-	switch s.Type {
+func (spec *Spec) check(value string) (string, error) {
+	switch spec.Type {
 	case "enum":
-		for _, allowed := range s.Values {
-			if v == allowed {
-				return v, nil
+		for _, allowed := range spec.Values {
+			if value == allowed {
+				return value, nil
 			}
 		}
-		return "", fmt.Errorf("must be one of %v", s.Values)
+		return "", fmt.Errorf("must be one of %v", spec.Values)
 	case "string":
-		if !s.re.MatchString(v) {
-			return "", fmt.Errorf("must match %s", s.Pattern)
+		if !spec.regex.MatchString(value) {
+			return "", fmt.Errorf("must match %s", spec.Pattern)
 		}
-		return v, nil
+		return value, nil
 	case "int":
-		n, err := strconv.Atoi(v)
+		number, err := strconv.Atoi(value)
 		if err != nil {
 			return "", fmt.Errorf("must be an integer")
 		}
-		if s.Min != nil && n < *s.Min {
-			return "", fmt.Errorf("must be >= %d", *s.Min)
+		if spec.Min != nil && number < *spec.Min {
+			return "", fmt.Errorf("must be >= %d", *spec.Min)
 		}
-		if s.Max != nil && n > *s.Max {
-			return "", fmt.Errorf("must be <= %d", *s.Max)
+		if spec.Max != nil && number > *spec.Max {
+			return "", fmt.Errorf("must be <= %d", *spec.Max)
 		}
-		return strconv.Itoa(n), nil
+		return strconv.Itoa(number), nil
 	case "bool":
-		b, err := strconv.ParseBool(v)
+		parsed, err := strconv.ParseBool(value)
 		if err != nil {
 			return "", fmt.Errorf("must be a boolean")
 		}
-		return strconv.FormatBool(b), nil
+		return strconv.FormatBool(parsed), nil
 	}
-	return "", fmt.Errorf("unknown type %q", s.Type)
+	return "", fmt.Errorf("unknown type %q", spec.Type)
 }
 
 type Schema map[string]*Spec
 
 // Validate returns normalized values for every declared parameter.
-func (sc Schema) Validate(in map[string]string) (map[string]string, error) {
-	for k := range in {
-		if _, ok := sc[k]; !ok {
-			return nil, fmt.Errorf("unknown parameter %q", k)
+func (schema Schema) Validate(input map[string]string) (map[string]string, error) {
+	for name := range input {
+		if _, ok := schema[name]; !ok {
+			return nil, fmt.Errorf("unknown parameter %q", name)
 		}
 	}
-	out := make(map[string]string, len(sc))
-	for _, name := range sc.Names() {
-		spec := sc[name]
-		v, ok := in[name]
+	out := make(map[string]string, len(schema))
+	for _, name := range schema.Names() {
+		spec := schema[name]
+		value, ok := input[name]
 		if !ok {
 			if spec.Default == nil {
 				return nil, fmt.Errorf("missing parameter %q", name)
 			}
-			v = *spec.Default
+			value = *spec.Default
 		}
-		nv, err := spec.check(v)
+		normalized, err := spec.check(value)
 		if err != nil {
 			return nil, fmt.Errorf("parameter %q: %w", name, err)
 		}
-		out[name] = nv
+		out[name] = normalized
 	}
 	return out, nil
 }
 
-func (sc Schema) Names() []string {
-	names := make([]string, 0, len(sc))
-	for k := range sc {
-		names = append(names, k)
+func (schema Schema) Names() []string {
+	names := make([]string, 0, len(schema))
+	for name := range schema {
+		names = append(names, name)
 	}
 	sort.Strings(names)
 	return names

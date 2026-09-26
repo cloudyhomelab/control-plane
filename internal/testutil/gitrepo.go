@@ -12,9 +12,9 @@ func NewTestRepo(t testing.TB, files map[string]string) string {
 	t.Helper()
 	dir := t.TempDir()
 	for name, content := range files {
-		p := filepath.Join(dir, name)
-		os.MkdirAll(filepath.Dir(p), 0o755)
-		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+		filePath := filepath.Join(dir, name)
+		os.MkdirAll(filepath.Dir(filePath), 0o755)
+		if err := os.WriteFile(filePath, []byte(content), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}

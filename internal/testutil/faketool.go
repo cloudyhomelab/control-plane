@@ -22,12 +22,12 @@ func RunFakeTool() {
 	}
 	args := os.Args[1:]
 	mode := "ok"
-	if b, err := os.ReadFile("fake-mode"); err == nil {
-		mode = strings.TrimSpace(string(b))
+	if content, err := os.ReadFile("fake-mode"); err == nil {
+		mode = strings.TrimSpace(string(content))
 	}
 	fmt.Printf("fake %s\n", strings.Join(args, " "))
-	if s := os.Getenv("FAKE_SECRET"); s != "" {
-		fmt.Printf("secret is %s\n", s)
+	if secret := os.Getenv("FAKE_SECRET"); secret != "" {
+		fmt.Printf("secret is %s\n", secret)
 	}
 	if len(args) == 0 {
 		os.Exit(0)
@@ -48,16 +48,16 @@ func RunFakeTool() {
 			case <-time.After(30 * time.Second):
 			}
 		}
-		for _, a := range args {
-			if out, ok := strings.CutPrefix(a, "-out="); ok {
+		for _, argument := range args {
+			if out, ok := strings.CutPrefix(argument, "-out="); ok {
 				os.WriteFile(out, []byte("PLAN"), 0o644)
 			}
 		}
 	case "show":
 		fmt.Println(`{"format_version":"1.2"}`)
 	case "apply":
-		b, err := os.ReadFile(args[len(args)-1])
-		if err != nil || string(b) != "PLAN" {
+		planContent, err := os.ReadFile(args[len(args)-1])
+		if err != nil || string(planContent) != "PLAN" {
 			fmt.Fprintln(os.Stderr, "bad plan file")
 			os.Exit(1)
 		}

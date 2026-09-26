@@ -44,25 +44,25 @@ func main() {
 		devToken(args)
 		return
 	}
-	c, err := newClient()
+	apiClient, err := newClient()
 	if err != nil {
 		fatal(err)
 	}
 	switch cmd {
 	case "actions":
-		err = c.printJSON("GET", "/v1/actions", nil)
+		err = apiClient.printJSON("GET", "/v1/actions", nil)
 	case "run":
 		var code int
-		code, err = c.run(args)
+		code, err = apiClient.run(args)
 		if err == nil {
 			os.Exit(code)
 		}
 	case "status":
-		err = c.printJSON("GET", "/v1/jobs/"+arg(args), nil)
+		err = apiClient.printJSON("GET", "/v1/jobs/"+arg(args), nil)
 	case "logs":
-		_, err = c.stream(context.Background(), arg(args))
+		_, err = apiClient.stream(context.Background(), arg(args))
 	case "cancel":
-		err = c.printJSON("POST", "/v1/jobs/"+arg(args)+"/cancel", nil)
+		err = apiClient.printJSON("POST", "/v1/jobs/"+arg(args)+"/cancel", nil)
 	default:
 		fmt.Fprint(os.Stderr, usage)
 		os.Exit(2)
@@ -99,33 +99,33 @@ func newClient() (*client, error) {
 		return nil, errors.New("CONTROLPLANE_URL is not set")
 	}
 	return &client{
-		base: base,
+		base:     base,
 		audience: os.Getenv("CONTROLPLANE_AUDIENCE"),
-		static: os.Getenv("CONTROLPLANE_TOKEN"),
-		http: &http.Client{Timeout: 3 * time.Minute},
+		static:   os.Getenv("CONTROLPLANE_TOKEN"),
+		http:     &http.Client{Timeout: 3 * time.Minute},
 	}, nil
 }
 
 // bearer returns a GitHub OIDC token, refreshed every minute since they are short lived.
-func (c *client) bearer(ctx context.Context) (string, error) {
-	if c.static != "" {
-		return c.static, nil
+func (apiClient *client) bearer(ctx context.Context) (string, error) {
+	if apiClient.static != "" {
+		return apiClient.static, nil
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.token != "" && time.Since(c.fetched) < time.Minute {
-		return c.token, nil
+	apiClient.mu.Lock()
+	defer apiClient.mu.Unlock()
+	if apiClient.token != "" && time.Since(apiClient.fetched) < time.Minute {
+		return apiClient.token, nil
 	}
 	reqURL, reqTok := os.Getenv("ACTIONS_ID_TOKEN_REQUEST_URL"), os.Getenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN")
 	if reqURL == "" || reqTok == "" {
 		return "", errors.New("no OIDC token available: add `permissions: id-token: write` to the workflow, or set CONTROLPLANE_TOKEN")
 	}
-	if c.audience != "" {
-		reqURL += "&audience=" + url.QueryEscape(c.audience)
+	if apiClient.audience != "" {
+		reqURL += "&audience=" + url.QueryEscape(apiClient.audience)
 	}
 	req, _ := http.NewRequestWithContext(ctx, "GET", reqURL, nil)
 	req.Header.Set("Authorization", "Bearer "+reqTok)
-	resp, err := c.http.Do(req)
+	resp, err := apiClient.http.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("fetch OIDC token: %w", err)
 	}
@@ -134,55 +134,55 @@ func (c *client) bearer(ctx context.Context) (string, error) {
 	if resp.StatusCode != 200 || json.NewDecoder(resp.Body).Decode(&body) != nil || body.Value == "" {
 		return "", fmt.Errorf("fetch OIDC token: HTTP %d", resp.StatusCode)
 	}
-	c.token, c.fetched = body.Value, time.Now()
-	return c.token, nil
+	apiClient.token, apiClient.fetched = body.Value, time.Now()
+	return apiClient.token, nil
 }
 
-func (c *client) do(ctx context.Context, method, path string, body any, hdr map[string]string) (*http.Response, []byte, error) {
-	tok, err := c.bearer(ctx)
+func (apiClient *client) do(ctx context.Context, method, path string, body any, hdr map[string]string) (*http.Response, []byte, error) {
+	tok, err := apiClient.bearer(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
-	var rd io.Reader
+	var requestBody io.Reader
 	if body != nil {
-		b, _ := json.Marshal(body)
-		rd = bytes.NewReader(b)
+		payload, _ := json.Marshal(body)
+		requestBody = bytes.NewReader(payload)
 	}
-	req, err := http.NewRequestWithContext(ctx, method, c.base+path, rd)
+	req, err := http.NewRequestWithContext(ctx, method, apiClient.base+path, requestBody)
 	if err != nil {
 		return nil, nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+tok)
 	req.Header.Set("Content-Type", "application/json")
-	for k, v := range hdr {
-		req.Header.Set(k, v)
+	for header, value := range hdr {
+		req.Header.Set(header, value)
 	}
-	resp, err := c.http.Do(req)
+	resp, err := apiClient.http.Do(req)
 	if err != nil {
 		return nil, nil, err
 	}
 	defer resp.Body.Close()
-	b, err := io.ReadAll(resp.Body)
+	responseBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, nil, err
 	}
 	if resp.StatusCode >= 300 {
-		var e struct{ Error, Code string }
-		if json.Unmarshal(b, &e) == nil && e.Error != "" {
-			return resp, b, fmt.Errorf("%s %s: HTTP %d %s: %s", method, path, resp.StatusCode, e.Code, e.Error)
+		var errorBody struct{ Error, Code string }
+		if json.Unmarshal(responseBody, &errorBody) == nil && errorBody.Error != "" {
+			return resp, responseBody, fmt.Errorf("%s %s: HTTP %d %s: %s", method, path, resp.StatusCode, errorBody.Code, errorBody.Error)
 		}
-		return resp, b, fmt.Errorf("%s %s: HTTP %d", method, path, resp.StatusCode)
+		return resp, responseBody, fmt.Errorf("%s %s: HTTP %d", method, path, resp.StatusCode)
 	}
-	return resp, b, nil
+	return resp, responseBody, nil
 }
 
-func (c *client) printJSON(method, path string, body any) error {
-	_, b, err := c.do(context.Background(), method, path, body, nil)
+func (apiClient *client) printJSON(method, path string, body any) error {
+	_, responseBody, err := apiClient.do(context.Background(), method, path, body, nil)
 	if err != nil {
 		return err
 	}
 	var out bytes.Buffer
-	json.Indent(&out, b, "", "  ")
+	json.Indent(&out, responseBody, "", "  ")
 	fmt.Println(out.String())
 	return nil
 }
@@ -198,31 +198,31 @@ type job struct {
 
 type paramFlags map[string]string
 
-func (p paramFlags) String() string { return "" }
-func (p paramFlags) Set(v string) error {
-	k, val, ok := strings.Cut(v, "=")
-	if !ok || k == "" {
-		return fmt.Errorf("want key=value, got %q", v)
+func (flags paramFlags) String() string { return "" }
+func (flags paramFlags) Set(value string) error {
+	key, val, ok := strings.Cut(value, "=")
+	if !ok || key == "" {
+		return fmt.Errorf("want key=value, got %q", value)
 	}
-	p[k] = val
+	flags[key] = val
 	return nil
 }
 
-func (c *client) run(args []string) (int, error) {
-	fs := flag.NewFlagSet("run", flag.ExitOnError)
+func (apiClient *client) run(args []string) (int, error) {
+	flagSet := flag.NewFlagSet("run", flag.ExitOnError)
 	params := paramFlags{}
-	fs.Var(params, "p", "parameter key=value (repeatable)")
-	ref := fs.String("ref", "", "git ref (default: the action's default)")
-	planJob := fs.String("plan-job", "", "plan job to apply")
-	noWait := fs.Bool("no-wait", false, "print the job id and return immediately")
+	flagSet.Var(params, "p", "parameter key=value (repeatable)")
+	ref := flagSet.String("ref", "", "git ref (default: the action's default)")
+	planJob := flagSet.String("plan-job", "", "plan job to apply")
+	noWait := flagSet.Bool("no-wait", false, "print the job id and return immediately")
 
 	// Accept flags before and after the action name.
 	var action string
-	for fs.Parse(args); fs.NArg() > 0; fs.Parse(args) {
+	for flagSet.Parse(args); flagSet.NArg() > 0; flagSet.Parse(args) {
 		if action != "" {
-			return 0, fmt.Errorf("unexpected argument %q", fs.Arg(0))
+			return 0, fmt.Errorf("unexpected argument %q", flagSet.Arg(0))
 		}
-		action, args = fs.Arg(0), fs.Args()[1:]
+		action, args = flagSet.Arg(0), flagSet.Args()[1:]
 	}
 	if action == "" {
 		return 0, errors.New("missing ACTION")
@@ -239,22 +239,22 @@ func (c *client) run(args []string) (int, error) {
 	if *planJob != "" {
 		body["plan_job_id"] = *planJob
 	}
-	_, b, err := c.do(context.Background(), "POST", "/v1/actions/"+url.PathEscape(action)+"/jobs", body, hdr)
+	_, responseBody, err := apiClient.do(context.Background(), "POST", "/v1/actions/"+url.PathEscape(action)+"/jobs", body, hdr)
 	if err != nil {
 		return 0, err
 	}
-	var j job
-	if err := json.Unmarshal(b, &j); err != nil {
+	var submitted job
+	if err := json.Unmarshal(responseBody, &submitted); err != nil {
 		return 0, err
 	}
-	if j.Ref != "" {
-		fmt.Fprintf(os.Stderr, "job %s: %s at %s (%s)\n", j.ID, action, j.Ref, j.CommitSHA)
+	if submitted.Ref != "" {
+		fmt.Fprintf(os.Stderr, "job %s: %s at %s (%s)\n", submitted.ID, action, submitted.Ref, submitted.CommitSHA)
 	} else {
-		fmt.Fprintf(os.Stderr, "job %s: %s\n", j.ID, action)
+		fmt.Fprintf(os.Stderr, "job %s: %s\n", submitted.ID, action)
 	}
-	setOutput("job_id", j.ID)
+	setOutput("job_id", submitted.ID)
 	if *noWait {
-		fmt.Println(j.ID)
+		fmt.Println(submitted.ID)
 		return 0, nil
 	}
 
@@ -264,10 +264,10 @@ func (c *client) run(args []string) (int, error) {
 	defer signal.Stop(sig)
 	go func() {
 		<-sig
-		fmt.Fprintln(os.Stderr, "cpctl: cancelling job", j.ID)
-		c.do(context.Background(), "POST", "/v1/jobs/"+j.ID+"/cancel", nil, nil)
+		fmt.Fprintln(os.Stderr, "cpctl: cancelling job", submitted.ID)
+		apiClient.do(context.Background(), "POST", "/v1/jobs/"+submitted.ID+"/cancel", nil, nil)
 	}()
-	final, err := c.stream(context.Background(), j.ID)
+	final, err := apiClient.stream(context.Background(), submitted.ID)
 	if err != nil {
 		return 0, err
 	}
@@ -283,40 +283,40 @@ func (c *client) run(args []string) (int, error) {
 }
 
 // stream copies the job log to stdout until the job is done, then returns its final state.
-func (c *client) stream(ctx context.Context, id string) (*job, error) {
+func (apiClient *client) stream(ctx context.Context, id string) (*job, error) {
 	offset := "0"
 	for {
-		resp, b, err := c.do(ctx, "GET", "/v1/jobs/"+id+"/logs?offset="+offset, nil, nil)
+		resp, chunk, err := apiClient.do(ctx, "GET", "/v1/jobs/"+id+"/logs?offset="+offset, nil, nil)
 		if err != nil {
 			return nil, err
 		}
-		os.Stdout.Write(b)
+		os.Stdout.Write(chunk)
 		offset = resp.Header.Get("X-Next-Offset")
 		done := resp.Header.Get("X-Job-Status") != "queued" && resp.Header.Get("X-Job-Status") != "running"
-		if done && len(b) == 0 {
+		if done && len(chunk) == 0 {
 			break
 		}
-		if len(b) == 0 {
+		if len(chunk) == 0 {
 			time.Sleep(2 * time.Second)
 		}
 	}
-	_, b, err := c.do(ctx, "GET", "/v1/jobs/"+id, nil, nil)
+	_, body, err := apiClient.do(ctx, "GET", "/v1/jobs/"+id, nil, nil)
 	if err != nil {
 		return nil, err
 	}
-	var j job
-	return &j, json.Unmarshal(b, &j)
+	var finalJob job
+	return &finalJob, json.Unmarshal(body, &finalJob)
 }
 
 // devToken prints the unsigned claims token that -insecure-dev-auth accepts.
 func devToken(args []string) {
 	claims := map[string]string{}
-	for _, a := range args {
-		k, v, ok := strings.Cut(a, "=")
+	for _, argument := range args {
+		key, value, ok := strings.Cut(argument, "=")
 		if !ok {
-			fatal(fmt.Errorf("want key=value, got %q", a))
+			fatal(fmt.Errorf("want key=value, got %q", argument))
 		}
-		claims[k] = v
+		claims[key] = value
 	}
 	if claims["repository"] == "" {
 		fatal(errors.New("repository=OWNER/NAME is required"))
@@ -324,17 +324,17 @@ func devToken(args []string) {
 	if claims["repository_owner"] == "" {
 		claims["repository_owner"], _, _ = strings.Cut(claims["repository"], "/")
 	}
-	b, _ := json.Marshal(claims)
-	fmt.Println(base64.RawURLEncoding.EncodeToString(b))
+	claimsJSON, _ := json.Marshal(claims)
+	fmt.Println(base64.RawURLEncoding.EncodeToString(claimsJSON))
 }
 
-func setOutput(k, v string) {
-	f := os.Getenv("GITHUB_OUTPUT")
-	if f == "" {
+func setOutput(key, value string) {
+	outputPath := os.Getenv("GITHUB_OUTPUT")
+	if outputPath == "" {
 		return
 	}
-	if fh, err := os.OpenFile(f, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0o644); err == nil {
-		fmt.Fprintf(fh, "%s=%s\n", k, v)
-		fh.Close()
+	if file, err := os.OpenFile(outputPath, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0o644); err == nil {
+		fmt.Fprintf(file, "%s=%s\n", key, value)
+		file.Close()
 	}
 }

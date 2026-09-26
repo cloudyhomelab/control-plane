@@ -6,23 +6,23 @@ import (
 )
 
 func TestExampleCatalog(t *testing.T) {
-	c, err := Load("../../examples/catalog.yml")
+	cfg, err := Load("../../examples/catalog.yml")
 	if err != nil {
 		t.Fatal(err)
 	}
-	apply := c.Actions["network.apply"]
+	apply := cfg.Actions["network.apply"]
 	if apply.Repo != "infra" || apply.Dir != "terraform/network" || apply.Lock != "tf-network" {
 		t.Errorf("apply did not inherit from plan: %+v", apply)
 	}
 	if !apply.RefMatchRequired() {
 		t.Error("apply should require ref match by default")
 	}
-	got, err := c.Actions["web.deploy"].Render("args", map[string]string{"limit": "web", "app_version": "abc1234"})
+	got, err := cfg.Actions["web.deploy"].Render("args", map[string]string{"limit": "web", "app_version": "abc1234"})
 	if err != nil || got["limit"] != "web" {
 		t.Errorf("render args = %v, %v", got, err)
 	}
-	if c.Server.OIDCJWKSURL != GitHubIssuer+"/.well-known/jwks" {
-		t.Errorf("jwks url = %s", c.Server.OIDCJWKSURL)
+	if cfg.Server.OIDCJWKSURL != GitHubIssuer+"/.well-known/jwks" {
+		t.Errorf("jwks url = %s", cfg.Server.OIDCJWKSURL)
 	}
 }
 
@@ -65,7 +65,7 @@ func TestRejects(t *testing.T) {
 }
 
 func TestCommand(t *testing.T) {
-	c, err := Parse([]byte(base + `
+	cfg, err := Parse([]byte(base + `
   host.uptime: { tool: command, command: [/usr/bin/uptime], allow: [{repository: r}] }
   host.ping:
     tool: command
@@ -78,10 +78,10 @@ func TestCommand(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Actions["host.uptime"].Op != "run" {
+	if cfg.Actions["host.uptime"].Op != "run" {
 		t.Error("op should default to run")
 	}
-	argv, err := c.Actions["host.ping"].RenderCommand(map[string]string{"count": "3", "host": "a.example"})
+	argv, err := cfg.Actions["host.ping"].RenderCommand(map[string]string{"count": "3", "host": "a.example"})
 	if err != nil || strings.Join(argv, " ") != "/usr/bin/ping -c 3 a.example" {
 		t.Errorf("argv = %q, %v", argv, err)
 	}

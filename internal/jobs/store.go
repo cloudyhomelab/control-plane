@@ -25,8 +25,8 @@ const (
 	TimedOut  Status = "timed_out"
 )
 
-func (s Status) Done() bool {
-	return s != Queued && s != Running
+func (status Status) Done() bool {
+	return status != Queued && status != Running
 }
 
 type Job struct {
@@ -103,58 +103,58 @@ func OpenStore(file string) (*Store, error) {
 	return &Store{db: db}, nil
 }
 
-func (s *Store) Close() error { return s.db.Close() }
+func (store *Store) Close() error { return store.db.Close() }
 
 func NewID() string {
-	b := make([]byte, 12)
-	rand.Read(b)
-	return hex.EncodeToString(b)
+	randomBytes := make([]byte, 12)
+	rand.Read(randomBytes)
+	return hex.EncodeToString(randomBytes)
 }
 
-func (s *Store) Create(ctx context.Context, j *Job) error {
-	p, _ := json.Marshal(j.Params)
-	c, _ := json.Marshal(j.Caller)
-	_, err := s.db.ExecContext(ctx, `INSERT INTO jobs
+func (store *Store) Create(ctx context.Context, job *Job) error {
+	paramsJSON, _ := json.Marshal(job.Params)
+	callerJSON, _ := json.Marshal(job.Caller)
+	_, err := store.db.ExecContext(ctx, `INSERT INTO jobs
 		(id, action, status, params_json, ref, commit_sha, plan_job_id, lock_key, repository, caller_json, idempotency_key, created_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		j.ID, j.Action, j.Status, string(p), j.Ref, j.CommitSHA, j.PlanJobID, j.LockKey, j.Repository, string(c),
-		j.IdempotencyKey, ts(j.CreatedAt))
+		job.ID, job.Action, job.Status, string(paramsJSON), job.Ref, job.CommitSHA, job.PlanJobID, job.LockKey, job.Repository, string(callerJSON),
+		job.IdempotencyKey, ts(job.CreatedAt))
 	return err
 }
 
 const cols = `id, action, status, params_json, ref, commit_sha, plan_job_id, lock_key, repository, caller_json,
 	idempotency_key, created_at, started_at, finished_at, exit_code, error`
 
-func (s *Store) Get(ctx context.Context, id string) (*Job, error) {
-	return s.one(ctx, `SELECT `+cols+` FROM jobs WHERE id = ?`, id)
+func (store *Store) Get(ctx context.Context, id string) (*Job, error) {
+	return store.one(ctx, `SELECT `+cols+` FROM jobs WHERE id = ?`, id)
 }
 
-func (s *Store) ByIdempotencyKey(ctx context.Context, repository, key string) (*Job, error) {
-	return s.one(ctx, `SELECT `+cols+` FROM jobs WHERE repository = ? AND idempotency_key = ?`, repository, key)
+func (store *Store) ByIdempotencyKey(ctx context.Context, repository, key string) (*Job, error) {
+	return store.one(ctx, `SELECT `+cols+` FROM jobs WHERE repository = ? AND idempotency_key = ?`, repository, key)
 }
 
 // PlanConsumed reports whether an apply using this plan is queued, running or done successfully.
-func (s *Store) PlanConsumed(ctx context.Context, planID string) (bool, error) {
-	var n int
-	err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM jobs WHERE plan_job_id = ? AND status IN (?, ?, ?)`,
-		planID, Queued, Running, Succeeded).Scan(&n)
-	return n > 0, err
+func (store *Store) PlanConsumed(ctx context.Context, planID string) (bool, error) {
+	var count int
+	err := store.db.QueryRowContext(ctx, `SELECT count(*) FROM jobs WHERE plan_job_id = ? AND status IN (?, ?, ?)`,
+		planID, Queued, Running, Succeeded).Scan(&count)
+	return count > 0, err
 }
 
-func (s *Store) SetRunning(ctx context.Context, id string, at time.Time) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE jobs SET status = ?, started_at = ? WHERE id = ?`, Running, ts(at), id)
+func (store *Store) SetRunning(ctx context.Context, id string, startedAt time.Time) error {
+	_, err := store.db.ExecContext(ctx, `UPDATE jobs SET status = ?, started_at = ? WHERE id = ?`, Running, ts(startedAt), id)
 	return err
 }
 
-func (s *Store) Finish(ctx context.Context, id string, st Status, exitCode *int, errMsg string, at time.Time) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE jobs SET status = ?, exit_code = ?, error = ?, finished_at = ? WHERE id = ?`,
-		st, exitCode, errMsg, ts(at), id)
+func (store *Store) Finish(ctx context.Context, id string, status Status, exitCode *int, errMsg string, finishedAt time.Time) error {
+	_, err := store.db.ExecContext(ctx, `UPDATE jobs SET status = ?, exit_code = ?, error = ?, finished_at = ? WHERE id = ?`,
+		status, exitCode, errMsg, ts(finishedAt), id)
 	return err
 }
 
 // FailInterrupted marks jobs left queued or running by a previous process as failed.
-func (s *Store) FailInterrupted(ctx context.Context) (int64, error) {
-	res, err := s.db.ExecContext(ctx, `UPDATE jobs SET status = ?, error = 'interrupted by server restart', finished_at = ?
+func (store *Store) FailInterrupted(ctx context.Context) (int64, error) {
+	res, err := store.db.ExecContext(ctx, `UPDATE jobs SET status = ?, error = 'interrupted by server restart', finished_at = ?
 		WHERE status IN (?, ?)`, Failed, ts(time.Now()), Queued, Running)
 	if err != nil {
 		return 0, err
@@ -162,48 +162,48 @@ func (s *Store) FailInterrupted(ctx context.Context) (int64, error) {
 	return res.RowsAffected()
 }
 
-func (s *Store) Audit(ctx context.Context, e AuditEntry) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO audit (ts, subject, repository, run_id, action, job_id, decision, reason)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, ts(time.Now()), e.Subject, e.Repository, e.RunID, e.Action, e.JobID, e.Decision, e.Reason)
+func (store *Store) Audit(ctx context.Context, entry AuditEntry) error {
+	_, err := store.db.ExecContext(ctx, `INSERT INTO audit (ts, subject, repository, run_id, action, job_id, decision, reason)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, ts(time.Now()), entry.Subject, entry.Repository, entry.RunID, entry.Action, entry.JobID, entry.Decision, entry.Reason)
 	return err
 }
 
-func (s *Store) one(ctx context.Context, q string, args ...any) (*Job, error) {
+func (store *Store) one(ctx context.Context, query string, args ...any) (*Job, error) {
 	var (
-		j                      Job
+		job                    Job
 		params, caller, create string
 		started, finished      sql.NullString
 		exit                   sql.NullInt64
 	)
-	err := s.db.QueryRowContext(ctx, q, args...).Scan(&j.ID, &j.Action, &j.Status, &params, &j.Ref, &j.CommitSHA,
-		&j.PlanJobID, &j.LockKey, &j.Repository, &caller, &j.IdempotencyKey, &create, &started, &finished, &exit, &j.Error)
+	err := store.db.QueryRowContext(ctx, query, args...).Scan(&job.ID, &job.Action, &job.Status, &params, &job.Ref, &job.CommitSHA,
+		&job.PlanJobID, &job.LockKey, &job.Repository, &caller, &job.IdempotencyKey, &create, &started, &finished, &exit, &job.Error)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
 	if err != nil {
 		return nil, err
 	}
-	json.Unmarshal([]byte(params), &j.Params)
-	json.Unmarshal([]byte(caller), &j.Caller)
-	j.CreatedAt = parseTS(create)
+	json.Unmarshal([]byte(params), &job.Params)
+	json.Unmarshal([]byte(caller), &job.Caller)
+	job.CreatedAt = parseTS(create)
 	if started.Valid {
-		t := parseTS(started.String)
-		j.StartedAt = &t
+		parsed := parseTS(started.String)
+		job.StartedAt = &parsed
 	}
 	if finished.Valid {
-		t := parseTS(finished.String)
-		j.FinishedAt = &t
+		parsed := parseTS(finished.String)
+		job.FinishedAt = &parsed
 	}
 	if exit.Valid {
-		n := int(exit.Int64)
-		j.ExitCode = &n
+		code := int(exit.Int64)
+		job.ExitCode = &code
 	}
-	return &j, nil
+	return &job, nil
 }
 
-func ts(t time.Time) string { return t.UTC().Format(time.RFC3339Nano) }
+func ts(moment time.Time) string { return moment.UTC().Format(time.RFC3339Nano) }
 
-func parseTS(s string) time.Time {
-	t, _ := time.Parse(time.RFC3339Nano, s)
-	return t
+func parseTS(text string) time.Time {
+	parsed, _ := time.Parse(time.RFC3339Nano, text)
+	return parsed
 }

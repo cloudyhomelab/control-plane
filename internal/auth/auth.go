@@ -33,8 +33,8 @@ func NewOIDC(ctx context.Context, issuer, jwksURL, audience, allowedOrg string) 
 	}
 }
 
-func (o *OIDC) Verify(ctx context.Context, raw string) (policy.Claims, error) {
-	tok, err := o.verifier.Verify(ctx, raw)
+func (oidcAuth *OIDC) Verify(ctx context.Context, raw string) (policy.Claims, error) {
+	tok, err := oidcAuth.verifier.Verify(ctx, raw)
 	if err != nil {
 		return nil, err
 	}
@@ -42,52 +42,52 @@ func (o *OIDC) Verify(ctx context.Context, raw string) (policy.Claims, error) {
 	if err := tok.Claims(&all); err != nil {
 		return nil, err
 	}
-	return checkOrg(stringClaims(all), o.allowedOrg)
+	return checkOrg(stringClaims(all), oidcAuth.allowedOrg)
 }
 
 func stringClaims(all map[string]any) policy.Claims {
-	c := policy.Claims{}
-	for k, v := range all {
-		if s, ok := v.(string); ok {
-			c[k] = s
+	claims := policy.Claims{}
+	for key, value := range all {
+		if text, ok := value.(string); ok {
+			claims[key] = text
 		}
 	}
-	return c
+	return claims
 }
 
-func checkOrg(c policy.Claims, org string) (policy.Claims, error) {
-	if c["repository_owner"] != org {
-		return nil, fmt.Errorf("repository_owner %q is not allowed", c["repository_owner"])
+func checkOrg(claims policy.Claims, org string) (policy.Claims, error) {
+	if claims["repository_owner"] != org {
+		return nil, fmt.Errorf("repository_owner %q is not allowed", claims["repository_owner"])
 	}
-	if !strings.HasPrefix(c["repository"], org+"/") {
-		return nil, fmt.Errorf("repository %q is outside %s", c["repository"], org)
+	if !strings.HasPrefix(claims["repository"], org+"/") {
+		return nil, fmt.Errorf("repository %q is outside %s", claims["repository"], org)
 	}
-	return c, nil
+	return claims, nil
 }
 
 // Dev accepts an unsigned base64url JSON object of claims. Only for loopback testing.
 type Dev struct{ AllowedOrg string }
 
-func (d Dev) Verify(_ context.Context, raw string) (policy.Claims, error) {
-	b, err := base64.RawURLEncoding.DecodeString(raw)
+func (dev Dev) Verify(_ context.Context, raw string) (policy.Claims, error) {
+	decoded, err := base64.RawURLEncoding.DecodeString(raw)
 	if err != nil {
 		return nil, fmt.Errorf("dev token: %w", err)
 	}
 	var all map[string]any
-	if err := json.Unmarshal(b, &all); err != nil {
+	if err := json.Unmarshal(decoded, &all); err != nil {
 		return nil, fmt.Errorf("dev token: %w", err)
 	}
-	return checkOrg(stringClaims(all), d.AllowedOrg)
+	return checkOrg(stringClaims(all), dev.AllowedOrg)
 }
 
 func DevToken(claims map[string]string) string {
-	b, _ := json.Marshal(claims)
-	return base64.RawURLEncoding.EncodeToString(b)
+	claimsJSON, _ := json.Marshal(claims)
+	return base64.RawURLEncoding.EncodeToString(claimsJSON)
 }
 
-func BearerToken(r *http.Request) (string, error) {
-	h := r.Header.Get("Authorization")
-	tok, ok := strings.CutPrefix(h, "Bearer ")
+func BearerToken(request *http.Request) (string, error) {
+	header := request.Header.Get("Authorization")
+	tok, ok := strings.CutPrefix(header, "Bearer ")
 	if !ok || tok == "" {
 		return "", errors.New("missing bearer token")
 	}

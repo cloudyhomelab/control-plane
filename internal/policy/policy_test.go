@@ -29,9 +29,9 @@ func TestAllowed(t *testing.T) {
 		{Claims{"repository": "cloudyhome/web-shop", "event_name": "pull_request"}, false},
 		{Claims{"repository": "evil/app", "event_name": "push"}, false},
 	}
-	for i, c := range cases {
-		if got := Allowed(rules, c.claims); got != c.want {
-			t.Errorf("case %d: got %v, want %v", i, got, c.want)
+	for index, testCase := range cases {
+		if got := Allowed(rules, testCase.claims); got != testCase.want {
+			t.Errorf("case %d: got %v, want %v", index, got, testCase.want)
 		}
 	}
 	if Allowed(nil, Claims{"repository": "cloudyhome/infra"}) {
@@ -41,17 +41,17 @@ func TestAllowed(t *testing.T) {
 
 func TestGlob(t *testing.T) {
 	cases := []struct {
-		pat, v string
-		want   bool
+		pattern, value string
+		want           bool
 	}{
 		{"refs/heads/*", "refs/heads/feature/x", true},
 		{"refs/heads/main", "refs/heads/main2", false},
 		{"a.b", "axb", false},
 		{"*", "", true},
 	}
-	for _, c := range cases {
-		if got := Glob(c.pat, c.v); got != c.want {
-			t.Errorf("Glob(%q, %q) = %v", c.pat, c.v, got)
+	for _, testCase := range cases {
+		if got := Glob(testCase.pattern, testCase.value); got != testCase.want {
+			t.Errorf("Glob(%q, %q) = %v", testCase.pattern, testCase.value, got)
 		}
 	}
 }

@@ -46,33 +46,33 @@ func NewManager(cfg *config.Config, store *Store, src *source.Source, dataDir st
 	}
 }
 
-func (m *Manager) JobDir(id string) string  { return filepath.Join(m.dataDir, "jobs", id) }
-func (m *Manager) LogFile(id string) string { return filepath.Join(m.JobDir(id), "log") }
+func (manager *Manager) JobDir(id string) string  { return filepath.Join(manager.dataDir, "jobs", id) }
+func (manager *Manager) LogFile(id string) string { return filepath.Join(manager.JobDir(id), "log") }
 
 // Enqueue starts a job that has already been stored as queued.
-func (m *Manager) Enqueue(j *Job) {
+func (manager *Manager) Enqueue(job *Job) {
 	ctx, cancel := context.WithCancelCause(context.Background())
-	m.mu.Lock()
-	m.cancels[j.ID] = cancel
-	m.mu.Unlock()
-	m.wg.Add(1)
+	manager.mu.Lock()
+	manager.cancels[job.ID] = cancel
+	manager.mu.Unlock()
+	manager.wg.Add(1)
 	go func() {
-		defer m.wg.Done()
+		defer manager.wg.Done()
 		defer func() {
-			m.mu.Lock()
-			delete(m.cancels, j.ID)
-			m.mu.Unlock()
+			manager.mu.Lock()
+			delete(manager.cancels, job.ID)
+			manager.mu.Unlock()
 			cancel(nil)
 		}()
-		m.run(ctx, j)
+		manager.run(ctx, job)
 	}()
 }
 
 // Cancel stops a queued or running job. It returns false if the job is not active.
-func (m *Manager) Cancel(id string) bool {
-	m.mu.Lock()
-	cancel, ok := m.cancels[id]
-	m.mu.Unlock()
+func (manager *Manager) Cancel(id string) bool {
+	manager.mu.Lock()
+	cancel, ok := manager.cancels[id]
+	manager.mu.Unlock()
 	if ok {
 		cancel(errCancelled)
 	}
@@ -80,100 +80,100 @@ func (m *Manager) Cancel(id string) bool {
 }
 
 // Shutdown cancels all active jobs and waits for them to finish.
-func (m *Manager) Shutdown() {
-	m.mu.Lock()
-	for _, c := range m.cancels {
-		c(errCancelled)
+func (manager *Manager) Shutdown() {
+	manager.mu.Lock()
+	for _, cancel := range manager.cancels {
+		cancel(errCancelled)
 	}
-	m.mu.Unlock()
-	m.wg.Wait()
+	manager.mu.Unlock()
+	manager.wg.Wait()
 }
 
-func (m *Manager) run(ctx context.Context, j *Job) {
-	a := m.cfg.Actions[j.Action]
+func (manager *Manager) run(ctx context.Context, job *Job) {
+	action := manager.cfg.Actions[job.Action]
 	status, exit, errMsg := Failed, (*int)(nil), ""
 	finish := func() {
-		if err := m.store.Finish(context.Background(), j.ID, status, exit, errMsg, time.Now()); err != nil {
-			slog.Error("finish job", "job", j.ID, "err", err)
+		if err := manager.store.Finish(context.Background(), job.ID, status, exit, errMsg, time.Now()); err != nil {
+			slog.Error("finish job", "job", job.ID, "err", err)
 		}
-		slog.Info("job finished", "job", j.ID, "action", j.Action, "status", status)
+		slog.Info("job finished", "job", job.ID, "action", job.Action, "status", status)
 	}
 	defer finish()
 
-	if err := os.MkdirAll(m.JobDir(j.ID), 0o750); err != nil {
+	if err := os.MkdirAll(manager.JobDir(job.ID), 0o750); err != nil {
 		errMsg = err.Error()
 		return
 	}
-	lw, err := logs.Create(m.LogFile(j.ID), m.secretValues(a))
+	logWriter, err := logs.Create(manager.LogFile(job.ID), manager.secretValues(action))
 	if err != nil {
 		errMsg = err.Error()
 		return
 	}
-	defer lw.Close()
+	defer logWriter.Close()
 
-	status, exit, err = m.execute(ctx, j, a, lw)
+	status, exit, err = manager.execute(ctx, job, action, logWriter)
 	if err != nil {
 		errMsg = err.Error()
-		lw.Line("error: " + errMsg)
+		logWriter.Line("error: " + errMsg)
 	}
-	lw.Line("job " + string(status))
+	logWriter.Line("job " + string(status))
 }
 
-func (m *Manager) execute(ctx context.Context, j *Job, a *config.Action, lw *logs.Writer) (Status, *int, error) {
-	if j.LockKey != "" {
-		release, err := m.acquireLock(ctx, j.LockKey, lw)
+func (manager *Manager) execute(ctx context.Context, job *Job, action *config.Action, logWriter *logs.Writer) (Status, *int, error) {
+	if job.LockKey != "" {
+		release, err := manager.acquireLock(ctx, job.LockKey, logWriter)
 		if err != nil {
 			return ctxStatus(ctx), nil, err
 		}
 		defer release()
 	}
 	select {
-	case m.sem <- struct{}{}:
-		defer func() { <-m.sem }()
+	case manager.sem <- struct{}{}:
+		defer func() { <-manager.sem }()
 	case <-ctx.Done():
 		return ctxStatus(ctx), nil, context.Cause(ctx)
 	}
 
-	if err := m.store.SetRunning(context.Background(), j.ID, time.Now()); err != nil {
+	if err := manager.store.SetRunning(context.Background(), job.ID, time.Now()); err != nil {
 		return Failed, nil, err
 	}
-	ctx, cancel := context.WithTimeoutCause(ctx, a.Timeout.Duration, errTimeout)
+	ctx, cancel := context.WithTimeoutCause(ctx, action.Timeout.Duration, errTimeout)
 	defer cancel()
 
 	var srcDir string
-	if a.Repo != "" {
-		lw.Line(fmt.Sprintf("action %s, ref %s, commit %s", j.Action, j.Ref, j.CommitSHA))
-		srcDir = filepath.Join(m.JobDir(j.ID), "src")
-		if err := m.src.Checkout(ctx, a.Repo, j.CommitSHA, srcDir); err != nil {
+	if action.Repo != "" {
+		logWriter.Line(fmt.Sprintf("action %s, ref %s, commit %s", job.Action, job.Ref, job.CommitSHA))
+		srcDir = filepath.Join(manager.JobDir(job.ID), "src")
+		if err := manager.src.Checkout(ctx, action.Repo, job.CommitSHA, srcDir); err != nil {
 			return ctxStatusOr(ctx, Failed), nil, err
 		}
 		defer func() {
-			if err := m.src.Remove(context.Background(), a.Repo, srcDir); err != nil {
-				slog.Warn("remove worktree", "job", j.ID, "err", err)
+			if err := manager.src.Remove(context.Background(), action.Repo, srcDir); err != nil {
+				slog.Warn("remove worktree", "job", job.ID, "err", err)
 			}
 		}()
 	} else {
-		lw.Line("action " + j.Action)
+		logWriter.Line("action " + job.Action)
 	}
 
-	in := tools.Input{
-		Action: a, ToolPath: m.cfg.Tools[a.Tool].Path, Params: j.Params,
-		SrcDir: srcDir, JobDir: m.JobDir(j.ID),
+	input := tools.Input{
+		Action: action, ToolPath: manager.cfg.Tools[action.Tool].Path, Params: job.Params,
+		SrcDir: srcDir, JobDir: manager.JobDir(job.ID),
 	}
-	if j.PlanJobID != "" {
-		in.PlanFile = filepath.Join(m.JobDir(j.PlanJobID), tools.PlanFile)
-		if _, err := os.Stat(in.PlanFile); err != nil {
+	if job.PlanJobID != "" {
+		input.PlanFile = filepath.Join(manager.JobDir(job.PlanJobID), tools.PlanFile)
+		if _, err := os.Stat(input.PlanFile); err != nil {
 			return Failed, nil, fmt.Errorf("plan file: %w", err)
 		}
 	}
-	steps, err := tools.Prepare(in)
+	steps, err := tools.Prepare(input)
 	if err != nil {
 		return Failed, nil, err
 	}
-	env := m.env(a)
+	env := manager.env(action)
 	for _, step := range steps {
-		lw.Line("$ " + strings.Join(step.Argv, " "))
-		code, err := runStep(ctx, step, env, lw, m.cfg.Server.CancelGrace.Duration)
+		logWriter.Line("$ " + strings.Join(step.Argv, " "))
+		code, err := runStep(ctx, step, env, logWriter, manager.cfg.Server.CancelGrace.Duration)
 		if err != nil {
 			if ctx.Err() != nil {
 				return ctxStatus(ctx), &code, context.Cause(ctx)
@@ -186,25 +186,25 @@ func (m *Manager) execute(ctx context.Context, j *Job, a *config.Action, lw *log
 }
 
 // acquireLock waits until no other job holds key.
-func (m *Manager) acquireLock(ctx context.Context, key string, lw *logs.Writer) (func(), error) {
-	m.mu.Lock()
-	ch, ok := m.locks[key]
+func (manager *Manager) acquireLock(ctx context.Context, key string, logWriter *logs.Writer) (func(), error) {
+	manager.mu.Lock()
+	slot, ok := manager.locks[key]
 	if !ok {
-		ch = make(chan struct{}, 1)
-		m.locks[key] = ch
+		slot = make(chan struct{}, 1)
+		manager.locks[key] = slot
 	}
-	m.mu.Unlock()
+	manager.mu.Unlock()
 	select {
-	case ch <- struct{}{}:
+	case slot <- struct{}{}:
 	default:
-		lw.Line("waiting for lock " + key)
+		logWriter.Line("waiting for lock " + key)
 		select {
-		case ch <- struct{}{}:
+		case slot <- struct{}{}:
 		case <-ctx.Done():
 			return nil, context.Cause(ctx)
 		}
 	}
-	return func() { <-ch }, nil
+	return func() { <-slot }, nil
 }
 
 func ctxStatus(ctx context.Context) Status {
@@ -222,11 +222,11 @@ func ctxStatusOr(ctx context.Context, fallback Status) Status {
 }
 
 // env builds the child environment from scratch; nothing from the caller reaches it.
-func (m *Manager) env(a *config.Action) []string {
-	home := filepath.Join(m.dataDir, "home")
+func (manager *Manager) env(action *config.Action) []string {
+	home := filepath.Join(manager.dataDir, "home")
 	os.MkdirAll(home, 0o750)
 	env := []string{
-		"PATH=" + m.getenv("PATH"),
+		"PATH=" + manager.getenv("PATH"),
 		"HOME=" + home,
 		"TF_IN_AUTOMATION=1",
 		"TF_INPUT=0",
@@ -234,29 +234,29 @@ func (m *Manager) env(a *config.Action) []string {
 		"ANSIBLE_NOCOLOR=1",
 		"ANSIBLE_FORCE_COLOR=0",
 	}
-	if a.EnvProfile == "" {
+	if action.EnvProfile == "" {
 		return env
 	}
-	p := m.cfg.EnvProfiles[a.EnvProfile]
-	for _, k := range append(append([]string{}, p.PassThrough...), p.Secrets...) {
-		if v := m.getenv(k); v != "" {
-			env = append(env, k+"="+v)
+	profile := manager.cfg.EnvProfiles[action.EnvProfile]
+	for _, name := range append(append([]string{}, profile.PassThrough...), profile.Secrets...) {
+		if value := manager.getenv(name); value != "" {
+			env = append(env, name+"="+value)
 		}
 	}
-	for k, v := range p.Set {
-		env = append(env, k+"="+v)
+	for name, value := range profile.Set {
+		env = append(env, name+"="+value)
 	}
 	return env
 }
 
-func (m *Manager) secretValues(a *config.Action) []string {
-	if a.EnvProfile == "" {
+func (manager *Manager) secretValues(action *config.Action) []string {
+	if action.EnvProfile == "" {
 		return nil
 	}
 	var out []string
-	for _, k := range m.cfg.EnvProfiles[a.EnvProfile].Secrets {
-		if v := m.getenv(k); v != "" {
-			out = append(out, v)
+	for _, name := range manager.cfg.EnvProfiles[action.EnvProfile].Secrets {
+		if value := manager.getenv(name); value != "" {
+			out = append(out, value)
 		}
 	}
 	return out

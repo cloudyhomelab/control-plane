@@ -24,31 +24,31 @@ func newIssuer(t *testing.T) *issuer {
 		t.Fatal(err)
 	}
 	jwks := jose.JSONWebKeySet{Keys: []jose.JSONWebKey{{Key: &key.PublicKey, KeyID: "k1", Algorithm: "RS256", Use: "sig"}}}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(jwks)
+	srv := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		json.NewEncoder(writer).Encode(jwks)
 	}))
 	t.Cleanup(srv.Close)
 	return &issuer{srv: srv, key: key}
 }
 
-func (i *issuer) sign(t *testing.T, key *rsa.PrivateKey, claims map[string]any) string {
+func (testIssuer *issuer) sign(t *testing.T, key *rsa.PrivateKey, claims map[string]any) string {
 	signer, err := jose.NewSigner(jose.SigningKey{Algorithm: jose.RS256, Key: key},
 		(&jose.SignerOptions{}).WithHeader("kid", "k1").WithType("JWT"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, _ := json.Marshal(claims)
-	jws, err := signer.Sign(b)
+	payload, _ := json.Marshal(claims)
+	jws, err := signer.Sign(payload)
 	if err != nil {
 		t.Fatal(err)
 	}
-	s, _ := jws.CompactSerialize()
-	return s
+	token, _ := jws.CompactSerialize()
+	return token
 }
 
 func TestOIDC(t *testing.T) {
 	iss := newIssuer(t)
-	v := NewOIDC(context.Background(), "https://issuer.test", iss.srv.URL, "cp", "cloudyhome")
+	verifier := NewOIDC(context.Background(), "https://issuer.test", iss.srv.URL, "cp", "cloudyhome")
 	now := time.Now()
 	good := func() map[string]any {
 		return map[string]any{
@@ -58,12 +58,12 @@ func TestOIDC(t *testing.T) {
 		}
 	}
 
-	c, err := v.Verify(context.Background(), iss.sign(t, iss.key, good()))
+	claims, err := verifier.Verify(context.Background(), iss.sign(t, iss.key, good()))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c["repository"] != "cloudyhome/infra" || c["run_id"] != "42" {
-		t.Errorf("claims = %v", c)
+	if claims["repository"] != "cloudyhome/infra" || claims["run_id"] != "42" {
+		t.Errorf("claims = %v", claims)
 	}
 
 	otherKey, _ := rsa.GenerateKey(rand.Reader, 2048)
@@ -77,24 +77,24 @@ func TestOIDC(t *testing.T) {
 		"garbage":        "not.a.jwt",
 	}
 	for name, tok := range cases {
-		if _, err := v.Verify(context.Background(), tok); err == nil {
+		if _, err := verifier.Verify(context.Background(), tok); err == nil {
 			t.Errorf("%s: expected error", name)
 		}
 	}
 }
 
-func with(m map[string]any, k string, v any) map[string]any {
-	m[k] = v
-	return m
+func with(claims map[string]any, key string, value any) map[string]any {
+	claims[key] = value
+	return claims
 }
 
 func TestDev(t *testing.T) {
-	d := Dev{AllowedOrg: "cloudyhome"}
-	c, err := d.Verify(context.Background(), DevToken(map[string]string{"repository": "cloudyhome/x", "repository_owner": "cloudyhome"}))
-	if err != nil || c["repository"] != "cloudyhome/x" {
-		t.Fatalf("%v %v", c, err)
+	dev := Dev{AllowedOrg: "cloudyhome"}
+	claims, err := dev.Verify(context.Background(), DevToken(map[string]string{"repository": "cloudyhome/x", "repository_owner": "cloudyhome"}))
+	if err != nil || claims["repository"] != "cloudyhome/x" {
+		t.Fatalf("%v %v", claims, err)
 	}
-	if _, err := d.Verify(context.Background(), DevToken(map[string]string{"repository": "evil/x", "repository_owner": "evil"})); err == nil {
+	if _, err := dev.Verify(context.Background(), DevToken(map[string]string{"repository": "evil/x", "repository_owner": "evil"})); err == nil {
 		t.Error("expected org rejection")
 	}
 }

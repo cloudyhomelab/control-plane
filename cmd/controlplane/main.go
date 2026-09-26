@@ -66,10 +66,10 @@ func run() error {
 		return fmt.Errorf("store: %w", err)
 	}
 	defer store.Close()
-	if n, err := store.FailInterrupted(context.Background()); err != nil {
+	if count, err := store.FailInterrupted(context.Background()); err != nil {
 		return err
-	} else if n > 0 {
-		slog.Warn("marked interrupted jobs as failed", "count", n)
+	} else if count > 0 {
+		slog.Warn("marked interrupted jobs as failed", "count", count)
 	}
 
 	src := source.New(*dataDir, cfg.Repos)
@@ -110,6 +110,6 @@ func isLoopback(addr string) bool {
 	if host == "localhost" {
 		return true
 	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
+	address := net.ParseIP(host)
+	return address != nil && address.IsLoopback()
 }

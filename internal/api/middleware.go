@@ -15,28 +15,28 @@ type statusWriter struct {
 	status int
 }
 
-func (w *statusWriter) WriteHeader(code int) {
-	w.status = code
-	w.ResponseWriter.WriteHeader(code)
+func (writer *statusWriter) WriteHeader(code int) {
+	writer.status = code
+	writer.ResponseWriter.WriteHeader(code)
 }
 
 func logRequests(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		id := jobs.NewID()[:12]
-		w.Header().Set("X-Request-Id", id)
-		sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
+		writer.Header().Set("X-Request-Id", id)
+		recorder := &statusWriter{ResponseWriter: writer, status: http.StatusOK}
 		start := time.Now()
-		next.ServeHTTP(sw, r)
-		if r.URL.Path != "/healthz" {
-			slog.Info("request", "id", id, "method", r.Method, "path", r.URL.Path, "status", sw.status, "dur", time.Since(start))
+		next.ServeHTTP(recorder, request)
+		if request.URL.Path != "/healthz" {
+			slog.Info("request", "id", id, "method", request.Method, "path", request.URL.Path, "status", recorder.status, "dur", time.Since(start))
 		}
 	})
 }
 
-func sortedActionNames(c *config.Config) []string {
-	names := make([]string, 0, len(c.Actions))
-	for n := range c.Actions {
-		names = append(names, n)
+func sortedActionNames(cfg *config.Config) []string {
+	names := make([]string, 0, len(cfg.Actions))
+	for name := range cfg.Actions {
+		names = append(names, name)
 	}
 	sort.Strings(names)
 	return names

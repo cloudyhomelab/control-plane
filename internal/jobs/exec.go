@@ -20,12 +20,12 @@ func runStep(ctx context.Context, step tools.Step, env []string, log io.Writer, 
 	cmd.Env = env
 	cmd.Stdout, cmd.Stderr = log, log
 	if step.StdoutFile != "" {
-		f, err := os.OpenFile(step.StdoutFile, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o640)
+		stdoutFile, err := os.OpenFile(step.StdoutFile, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o640)
 		if err != nil {
 			return -1, err
 		}
-		defer f.Close()
-		cmd.Stdout = f
+		defer stdoutFile.Close()
+		cmd.Stdout = stdoutFile
 	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGINT) }

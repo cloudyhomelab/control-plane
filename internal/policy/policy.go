@@ -22,58 +22,58 @@ var KnownClaims = map[string]bool{
 // Patterns accepts a scalar or a list in YAML. `*` matches any run of characters, including `/`.
 type Patterns []string
 
-func (p *Patterns) UnmarshalYAML(n *yaml.Node) error {
-	switch n.Kind {
+func (patterns *Patterns) UnmarshalYAML(node *yaml.Node) error {
+	switch node.Kind {
 	case yaml.ScalarNode:
-		*p = Patterns{n.Value}
+		*patterns = Patterns{node.Value}
 		return nil
 	case yaml.SequenceNode:
-		var s []string
-		if err := n.Decode(&s); err != nil {
+		var values []string
+		if err := node.Decode(&values); err != nil {
 			return err
 		}
-		*p = s
+		*patterns = values
 		return nil
 	}
-	return fmt.Errorf("line %d: expected string or list", n.Line)
+	return fmt.Errorf("line %d: expected string or list", node.Line)
 }
 
-func (p Patterns) Match(v string) bool {
-	for _, pat := range p {
-		if Glob(pat, v) {
+func (patterns Patterns) Match(value string) bool {
+	for _, pat := range patterns {
+		if Glob(pat, value) {
 			return true
 		}
 	}
 	return false
 }
 
-func Glob(pattern, v string) bool {
+func Glob(pattern, value string) bool {
 	parts := strings.Split(pattern, "*")
-	for i := range parts {
-		parts[i] = regexp.QuoteMeta(parts[i])
+	for index := range parts {
+		parts[index] = regexp.QuoteMeta(parts[index])
 	}
-	return regexp.MustCompile("^" + strings.Join(parts, ".*") + "$").MatchString(v)
+	return regexp.MustCompile("^" + strings.Join(parts, ".*") + "$").MatchString(value)
 }
 
 // Rule matches when every claim it names matches one of its patterns.
 type Rule map[string]Patterns
 
-func (r Rule) Validate() error {
-	if len(r) == 0 {
+func (rule Rule) Validate() error {
+	if len(rule) == 0 {
 		return fmt.Errorf("empty rule would match everyone")
 	}
-	for k := range r {
-		if !KnownClaims[k] {
-			return fmt.Errorf("unknown claim %q", k)
+	for claim := range rule {
+		if !KnownClaims[claim] {
+			return fmt.Errorf("unknown claim %q", claim)
 		}
 	}
 	return nil
 }
 
-func (r Rule) Match(c Claims) bool {
-	for k, pats := range r {
-		v, ok := c[k]
-		if !ok || !pats.Match(v) {
+func (rule Rule) Match(claims Claims) bool {
+	for claim, patterns := range rule {
+		value, ok := claims[claim]
+		if !ok || !patterns.Match(value) {
 			return false
 		}
 	}
@@ -81,9 +81,9 @@ func (r Rule) Match(c Claims) bool {
 }
 
 // Allowed reports whether any rule matches. No rules means nobody is allowed.
-func Allowed(rules []Rule, c Claims) bool {
-	for _, r := range rules {
-		if r.Match(c) {
+func Allowed(rules []Rule, claims Claims) bool {
+	for _, rule := range rules {
+		if rule.Match(claims) {
 			return true
 		}
 	}

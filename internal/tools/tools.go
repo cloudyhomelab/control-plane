@@ -35,40 +35,40 @@ const (
 )
 
 // Prepare writes any var files into the job dir and returns the steps to run in order.
-func Prepare(in Input) ([]Step, error) {
-	a := in.Action
-	dir := filepath.Join(in.SrcDir, a.Dir)
-	if in.SrcDir == "" {
-		dir = in.JobDir
+func Prepare(input Input) ([]Step, error) {
+	action := input.Action
+	dir := filepath.Join(input.SrcDir, action.Dir)
+	if input.SrcDir == "" {
+		dir = input.JobDir
 	}
-	vars, err := a.Render("vars", in.Params)
+	vars, err := action.Render("vars", input.Params)
 	if err != nil {
 		return nil, err
 	}
-	bin := in.ToolPath
+	bin := input.ToolPath
 	step := func(args ...string) Step { return Step{Argv: append([]string{bin}, args...), Dir: dir} }
 
-	switch a.Tool + "." + a.Op {
+	switch action.Tool + "." + action.Op {
 	case "terraform.plan":
-		varFile, err := writeVars(in.JobDir, "vars.tfvars.json", vars)
+		varFile, err := writeVars(input.JobDir, "vars.tfvars.json", vars)
 		if err != nil {
 			return nil, err
 		}
-		plan := filepath.Join(in.JobDir, PlanFile)
+		plan := filepath.Join(input.JobDir, PlanFile)
 		show := step("show", "-json", "-no-color", plan)
-		show.StdoutFile = filepath.Join(in.JobDir, PlanJSONFile)
+		show.StdoutFile = filepath.Join(input.JobDir, PlanJSONFile)
 		return []Step{
 			step("init", "-input=false", "-no-color"),
 			step(append([]string{"plan", "-input=false", "-no-color", "-out=" + plan}, varFile...)...),
 			show,
 		}, nil
 	case "terraform.apply":
-		if in.PlanFile == "" {
+		if input.PlanFile == "" {
 			return nil, fmt.Errorf("apply needs a plan file")
 		}
 		return []Step{
 			step("init", "-input=false", "-no-color"),
-			step("apply", "-input=false", "-no-color", in.PlanFile),
+			step("apply", "-input=false", "-no-color", input.PlanFile),
 		}, nil
 	case "terraform.validate":
 		return []Step{
@@ -76,12 +76,12 @@ func Prepare(in Input) ([]Step, error) {
 			step("validate", "-no-color"),
 		}, nil
 	case "packer.build", "packer.validate":
-		varFile, err := writeVars(in.JobDir, "vars.pkrvars.json", vars)
+		varFile, err := writeVars(input.JobDir, "vars.pkrvars.json", vars)
 		if err != nil {
 			return nil, err
 		}
-		args := []string{a.Op, "-color=false"}
-		if a.Op == "build" {
+		args := []string{action.Op, "-color=false"}
+		if action.Op == "build" {
 			args = append(args, "-timestamp-ui")
 		}
 		return []Step{
@@ -89,34 +89,34 @@ func Prepare(in Input) ([]Step, error) {
 			step(append(append(args, varFile...), ".")...),
 		}, nil
 	case "command.run":
-		argv, err := a.RenderCommand(in.Params)
+		argv, err := action.RenderCommand(input.Params)
 		if err != nil {
 			return nil, err
 		}
 		return []Step{{Argv: argv, Dir: dir}}, nil
 	case "ansible.playbook", "ansible.check":
-		rendered, err := a.Render("args", in.Params)
+		rendered, err := action.Render("args", input.Params)
 		if err != nil {
 			return nil, err
 		}
-		args := []string{"-i", a.Inventory}
-		for _, k := range sortedKeys(rendered) {
+		args := []string{"-i", action.Inventory}
+		for _, key := range sortedKeys(rendered) {
 			// --flag=value keeps a value starting with "-" from being parsed as an option.
-			args = append(args, config.AnsibleArgs[k]+"="+rendered[k])
+			args = append(args, config.AnsibleArgs[key]+"="+rendered[key])
 		}
 		if len(vars) > 0 {
-			f, err := writeVarsFile(in.JobDir, "extra-vars.json", vars)
+			varsFile, err := writeVarsFile(input.JobDir, "extra-vars.json", vars)
 			if err != nil {
 				return nil, err
 			}
-			args = append(args, "--extra-vars=@"+f)
+			args = append(args, "--extra-vars=@"+varsFile)
 		}
-		if a.Op == "check" {
+		if action.Op == "check" {
 			args = append(args, "--check", "--diff")
 		}
-		return []Step{step(append(args, a.Playbook)...)}, nil
+		return []Step{step(append(args, action.Playbook)...)}, nil
 	}
-	return nil, fmt.Errorf("unsupported %s %s", a.Tool, a.Op)
+	return nil, fmt.Errorf("unsupported %s %s", action.Tool, action.Op)
 }
 
 // writeVars returns the -var-file argument, or nothing when there are no vars.
@@ -124,26 +124,26 @@ func writeVars(jobDir, name string, vars map[string]string) ([]string, error) {
 	if len(vars) == 0 {
 		return nil, nil
 	}
-	f, err := writeVarsFile(jobDir, name, vars)
+	path, err := writeVarsFile(jobDir, name, vars)
 	if err != nil {
 		return nil, err
 	}
-	return []string{"-var-file=" + f}, nil
+	return []string{"-var-file=" + path}, nil
 }
 
 func writeVarsFile(jobDir, name string, vars map[string]string) (string, error) {
-	b, err := json.MarshalIndent(vars, "", "  ")
+	encoded, err := json.MarshalIndent(vars, "", "  ")
 	if err != nil {
 		return "", err
 	}
-	f := filepath.Join(jobDir, name)
-	return f, os.WriteFile(f, b, 0o640)
+	path := filepath.Join(jobDir, name)
+	return path, os.WriteFile(path, encoded, 0o640)
 }
 
-func sortedKeys(m map[string]string) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
+func sortedKeys(values map[string]string) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
 	}
 	sort.Strings(keys)
 	return keys

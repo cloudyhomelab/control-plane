@@ -12,26 +12,26 @@ import (
 )
 
 func catalog(t *testing.T) *config.Config {
-	c, err := config.Load("../../examples/catalog.yml")
+	cfg, err := config.Load("../../examples/catalog.yml")
 	if err != nil {
 		t.Fatal(err)
 	}
-	return c
+	return cfg
 }
 
 func argvs(steps []Step, jobDir string) []string {
 	var out []string
-	for _, s := range steps {
-		out = append(out, strings.ReplaceAll(strings.Join(s.Argv, " "), jobDir, "$JOB"))
+	for _, step := range steps {
+		out = append(out, strings.ReplaceAll(strings.Join(step.Argv, " "), jobDir, "$JOB"))
 	}
 	return out
 }
 
 func TestTerraformPlan(t *testing.T) {
-	c := catalog(t)
+	cfg := catalog(t)
 	job := t.TempDir()
 	steps, err := Prepare(Input{
-		Action: c.Actions["network.plan"], ToolPath: "terraform",
+		Action: cfg.Actions["network.plan"], ToolPath: "terraform",
 		Params: map[string]string{"region": "eu-west-1"}, SrcDir: "/src", JobDir: job,
 	})
 	if err != nil {
@@ -49,31 +49,31 @@ func TestTerraformPlan(t *testing.T) {
 		t.Errorf("dir/stdout = %s %s", steps[0].Dir, steps[2].StdoutFile)
 	}
 	var vars map[string]string
-	b, _ := os.ReadFile(filepath.Join(job, "vars.tfvars.json"))
-	json.Unmarshal(b, &vars)
+	content, _ := os.ReadFile(filepath.Join(job, "vars.tfvars.json"))
+	json.Unmarshal(content, &vars)
 	if vars["region"] != "eu-west-1" {
 		t.Errorf("vars = %v", vars)
 	}
 }
 
 func TestTerraformApply(t *testing.T) {
-	c := catalog(t)
-	steps, err := Prepare(Input{Action: c.Actions["network.apply"], ToolPath: "tf", SrcDir: "/src", JobDir: t.TempDir(), PlanFile: "/p/tfplan"})
+	cfg := catalog(t)
+	steps, err := Prepare(Input{Action: cfg.Actions["network.apply"], ToolPath: "tf", SrcDir: "/src", JobDir: t.TempDir(), PlanFile: "/p/tfplan"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := steps[1].Argv; !reflect.DeepEqual(got, []string{"tf", "apply", "-input=false", "-no-color", "/p/tfplan"}) {
 		t.Errorf("apply argv = %q", got)
 	}
-	if _, err := Prepare(Input{Action: c.Actions["network.apply"], ToolPath: "tf", JobDir: t.TempDir()}); err == nil {
+	if _, err := Prepare(Input{Action: cfg.Actions["network.apply"], ToolPath: "tf", JobDir: t.TempDir()}); err == nil {
 		t.Error("apply without plan must fail")
 	}
 }
 
 func TestPacker(t *testing.T) {
-	c := catalog(t)
+	cfg := catalog(t)
 	job := t.TempDir()
-	steps, err := Prepare(Input{Action: c.Actions["base-image.build"], ToolPath: "packer", Params: map[string]string{"version": "1.2.3"}, SrcDir: "/src", JobDir: job})
+	steps, err := Prepare(Input{Action: cfg.Actions["base-image.build"], ToolPath: "packer", Params: map[string]string{"version": "1.2.3"}, SrcDir: "/src", JobDir: job})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,9 +84,9 @@ func TestPacker(t *testing.T) {
 }
 
 func TestAnsible(t *testing.T) {
-	c := catalog(t)
+	cfg := catalog(t)
 	job := t.TempDir()
-	steps, err := Prepare(Input{Action: c.Actions["web.deploy"], ToolPath: "ansible-playbook",
+	steps, err := Prepare(Input{Action: cfg.Actions["web.deploy"], ToolPath: "ansible-playbook",
 		Params: map[string]string{"limit": "web", "app_version": "abc1234"}, SrcDir: "/src", JobDir: job})
 	if err != nil {
 		t.Fatal(err)
@@ -101,7 +101,7 @@ func TestAnsible(t *testing.T) {
 }
 
 func TestCommand(t *testing.T) {
-	c, err := config.Parse([]byte(`
+	cfg, err := config.Parse([]byte(`
 server: { oidc_audience: aud, allowed_org: o }
 repos: { infra: { url: /x } }
 actions:
@@ -122,7 +122,7 @@ actions:
 		t.Fatal(err)
 	}
 	job := t.TempDir()
-	steps, err := Prepare(Input{Action: c.Actions["host.echo"], Params: map[string]string{"who": "a b"}, JobDir: job})
+	steps, err := Prepare(Input{Action: cfg.Actions["host.echo"], Params: map[string]string{"who": "a b"}, JobDir: job})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,7 +130,7 @@ actions:
 	if !reflect.DeepEqual(steps[0].Argv, []string{"/bin/echo", "hello a b"}) || steps[0].Dir != job {
 		t.Errorf("step = %+v", steps[0])
 	}
-	steps, _ = Prepare(Input{Action: c.Actions["repo.ls"], SrcDir: "/src", JobDir: job})
+	steps, _ = Prepare(Input{Action: cfg.Actions["repo.ls"], SrcDir: "/src", JobDir: job})
 	if steps[0].Dir != "/src/sub" {
 		t.Errorf("dir = %s", steps[0].Dir)
 	}
