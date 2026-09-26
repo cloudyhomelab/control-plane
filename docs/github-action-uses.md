@@ -1,9 +1,9 @@
-# How `uses: cloudyhomelab/control-plane/action@main` works
+# How `uses: cloudyhomelab/control-plane/action@v0.1.0` works
 
 This explains the workflow step that calls the control plane:
 
 ```yaml
-- uses: cloudyhomelab/control-plane/action@main
+- uses: cloudyhomelab/control-plane/action@v0.1.0
   with:
     server: ${{ env.CP_SERVER }}
     audience: ${{ env.CP_AUDIENCE }}
@@ -19,21 +19,21 @@ action is the `action/` folder of the controlplane repo.
 ## 1. Reading the `uses:` string
 
 ```
-cloudyhomelab/control-plane/action@main
-└──┬─────┘ └────┬─────┘ └─┬──┘ └┬─┘
-  owner       repo      path   git ref (branch, tag or commit SHA)
+cloudyhomelab/control-plane/action@v0.1.0
+└─────┬─────┘ └─────┬─────┘ └─┬──┘ └─┬──┘
+    owner         repo      path   git ref (branch, tag or commit SHA)
 ```
 
 When the job reaches this step, the runner:
 
-1. Downloads `github.com/cloudyhomelab/control-plane` at `main`. It does this itself, before any
+1. Downloads `github.com/cloudyhomelab/control-plane` at `v0.1.0`. It does this itself, before any
    step runs; you don't need `actions/checkout` for it.
 2. Goes into the `action/` subfolder and reads `action/action.yml`. That file is what makes a
    folder an action.
 3. Sees `runs: using: composite`, so it runs the steps listed in that file inside your job,
    on the same runner.
 
-Without a path (`cloudyhomelab/control-plane@main`), it would look for `action.yml` at the repo
+Without a path (`cloudyhomelab/control-plane@v0.1.0`), it would look for `action.yml` at the repo
 root. The subfolder keeps the action separate from the server code.
 
 ## 2. `with:` fills the action's inputs
@@ -76,7 +76,7 @@ The composite action runs three steps from `action/action.yml`.
 ```
 
 `github.action_path` is where the runner downloaded the action, i.e.
-`.../cloudyhomelab/control-plane/main/action`, so `../go.mod` is the controlplane repo's `go.mod`.
+`.../cloudyhomelab/control-plane/v0.1.0/action`, so `../go.mod` is the controlplane repo's `go.mod`.
 
 **Step 2: build `cpctl`** from that same download:
 
@@ -134,12 +134,12 @@ plan:
     job_id: ${{ steps.plan.outputs.job_id }}   # step output -> job output
   steps:
     - id: plan                                 # the id makes steps.plan.* work
-      uses: cloudyhomelab/control-plane/action@main
+      uses: cloudyhomelab/control-plane/action@v0.1.0
       ...
 apply:
   needs: plan
   steps:
-    - uses: cloudyhomelab/control-plane/action@main
+    - uses: cloudyhomelab/control-plane/action@v0.1.0
       with:
         action: network.apply
         input-job: ${{ needs.plan.outputs.job_id }}
@@ -152,9 +152,10 @@ apply:
 - **Private repo:** if `cloudyhomelab/control-plane` is private, other repos can only use its
   action after you set Settings > Actions > General > Access to "Accessible from repositories
   in the 'cloudyhomelab' organization".
-- **`@main` is a moving target:** every run uses whatever `main` is at that moment, so a push
-  to the controlplane repo changes every workflow that uses it. Once it's stable, pin to a tag
-  (`@v1`) or a full commit SHA. A SHA can't be moved.
+- **Pin a release tag, not `@main`:** `@main` runs whatever `main` is at that moment, so a
+  push to the controlplane repo would change every workflow that uses it. `@v0.1.0` runs
+  exactly that release, and with immutable releases on (see RELEASE.md) the tag can't be
+  moved. Moving to a newer release is a deliberate edit of the tag in each workflow.
 - **Inside the controlplane repo you can use a local path:** a workflow there can say
   `uses: ./action`, which needs `actions/checkout` first since the path is relative to the
   checkout. That's handy for testing changes to the action before merging.

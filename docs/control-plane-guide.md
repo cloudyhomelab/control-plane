@@ -599,7 +599,7 @@ jobs:
   uptime:
     runs-on: ubuntu-latest
     steps:
-      - uses: cloudyhomelab/control-plane/action@main
+      - uses: cloudyhomelab/control-plane/action@v0.1.0
         with:
           server: https://controlplane.cloudyhome.net
           audience: controlplane_cloudyhome
@@ -614,7 +614,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: production        # puts environment=production in the token
     steps:
-      - uses: cloudyhomelab/control-plane/action@main
+      - uses: cloudyhomelab/control-plane/action@v0.1.0
         with:
           server: https://controlplane.cloudyhome.net
           audience: controlplane_cloudyhome
