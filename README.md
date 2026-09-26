@@ -186,3 +186,10 @@ go run ./cmd/cpctl run host.uptime
 ## Tests
 
 `task test` (or `go test ./...`); `task check` runs everything CI does, `task fmt` formats. Job runs use the test binary as a fake terraform, so no tools are needed.
+
+## Releases
+
+Tagged `vX.Y.Z` releases carry linux amd64 and arm64 binaries of `controlplane` and `cpctl`
+with a `SHA256SUMS` file; `controlplane -version` and `cpctl version` report the version.
+Every pull request adds a changelog fragment (`task changie -- new`). [RELEASE.md](RELEASE.md)
+is how a release is cut.

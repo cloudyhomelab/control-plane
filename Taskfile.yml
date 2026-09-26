@@ -1,5 +1,8 @@
 version: '3'
 
+vars:
+  CHANGIE: github.com/miniscruff/changie@v1.26.0
+
 tasks:
   default:
     deps: [check]
@@ -21,7 +24,7 @@ tasks:
         fi
 
   build:
-    desc: Build controlplane and cpctl for every release platform into bin/<os>-<arch>-<cmd>
+    desc: Build controlplane and cpctl for every release platform into bin/<os>-<arch>-<cmd>; VERSION=X.Y.Z stamps a release
     silent: true
     cmds:
       - for:
@@ -30,7 +33,7 @@ tasks:
             ARCH: [amd64, arm64]
         cmd: |
           for cmd in controlplane cpctl; do
-            CGO_ENABLED=0 GOOS={{.ITEM.OS}} GOARCH={{.ITEM.ARCH}} go build -trimpath -ldflags=-s -o bin/{{.ITEM.OS}}-{{.ITEM.ARCH}}-$cmd ./cmd/$cmd
+            CGO_ENABLED=0 GOOS={{.ITEM.OS}} GOARCH={{.ITEM.ARCH}} go build -trimpath -ldflags="-s -X main.version={{.VERSION | default "dev"}}" -o bin/{{.ITEM.OS}}-{{.ITEM.ARCH}}-$cmd ./cmd/$cmd
           done
 
   clean:
@@ -51,6 +54,23 @@ tasks:
     cmds:
       - go test ./...
 
+  changie:
+    desc: Run the pinned changie, e.g. task changie -- new
+    silent: true
+    cmds:
+      - go run {{.CHANGIE}} {{.CLI_ARGS}}
+
+  changelog:check:
+    desc: Fail if a fragment does not parse or CHANGELOG.md is not what .changes/ merges to
+    silent: true
+    cmds:
+      - go run {{.CHANGIE}} batch patch --dry-run > /dev/null
+      - go run {{.CHANGIE}} merge
+      - |
+        git diff --exit-code -- CHANGELOG.md || {
+          echo "CHANGELOG.md is generated; run 'task changie -- merge' and commit the result."; exit 1
+        }
+
   check:
     desc: Everything CI runs
     silent: true
@@ -60,3 +80,4 @@ tasks:
       - task: build
       - task: vet
       - task: test
+      - task: changelog:check

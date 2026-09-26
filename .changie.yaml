@@ -1,0 +1,35 @@
+# Fragments land with the change they describe; the release folds them. RELEASE.md has the workflow.
+changesDir: .changes
+unreleasedDir: unreleased
+headerPath: header.tpl.md
+# The release summary: one paragraph heading the version's notes, folded in and deleted by batch.
+versionHeaderPath: summary.md
+changelogPath: CHANGELOG.md
+versionExt: md
+versionFormat: '## {{.Version}} - {{.Time.Format "2006-01-02"}}'
+kindFormat: '### {{.Kind}}'
+changeFormat: '- {{.Body}}'
+newlines:
+  afterVersion: 1
+  beforeKind: 1
+  afterKind: 1
+  endOfVersion: 1
+  afterChangelogHeader: 1
+# `auto` is the bump each kind implies; Prepare release refuses a smaller one.
+kinds:
+  - label: Breaking
+    auto: major
+  - label: Removed
+    auto: major
+  - label: Added
+    auto: minor
+  - label: Changed
+    auto: minor
+  - label: Deprecated
+    auto: minor
+  - label: Fixed
+    auto: patch
+  - label: Security
+    auto: patch
+  - label: Internal
+    auto: patch

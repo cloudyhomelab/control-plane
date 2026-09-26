@@ -1,0 +1,57 @@
+# The brief both approvals read: the `prepare` environment on the release PR and the
+# `release` environment on the Release run. Composed once so the two show the same picture.
+# Needs the whole history and every tag, and the binaries built into bin/.
+name: Write the release brief
+description: Append the commits since the previous release, the version's notes and the built binaries to the step summary.
+
+inputs:
+  version:
+    description: The version being released, plain X.Y.Z.
+    required: true
+  heading:
+    description: The summary's title, without the leading `## `.
+    required: true
+  intro:
+    description: One line under the title, saying what the run is looking at.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Write the brief
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+        HEADING: ${{ inputs.heading }}
+        INTRO: ${{ inputs.intro }}
+      run: |
+        # The tag just below this version in version order, so a patch on an older line
+        # compares against its own line.
+        previous="$( { git tag --list 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$'; echo "v$VERSION"; } \
+          | sort -uV | grep -Fx -B1 "v$VERSION" | head -1)"
+        [ "$previous" = "v$VERSION" ] && previous=""
+        sha="$(git rev-parse HEAD)"
+        {
+          echo "## $HEADING"
+          echo
+          echo "$INTRO"
+          echo
+          if [ -n "$previous" ]; then
+            echo "### Commits since $previous"
+            echo
+            echo "[Compare $previous...${sha:0:12}]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/compare/$previous...$sha)"
+            echo
+            git log --no-decorate --format='- %h %s' "$previous..HEAD"
+          else
+            echo "No earlier release tag: this is the first release."
+          fi
+          echo
+          echo "### Release notes"
+          sed 1d ".changes/$VERSION.md"
+          echo
+          echo "### Built binaries"
+          echo
+          echo '```'
+          (cd bin && sha256sum *)
+          echo '```'
+        } >> "$GITHUB_STEP_SUMMARY"
