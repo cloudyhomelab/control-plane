@@ -1,13 +1,13 @@
 server:
   oidc_audience: controlplane_cloudyhome
-  allowed_org: cloudyhome
+  allowed_org: cloudyhomelab
   max_concurrent_jobs: 4
 
 repos:
   homelab_public:
-    url: https://github.com/cloudyhome/homelab.git
+    url: https://github.com/cloudyhomelab/homelab.git
   homelab_private:
-    url: git@github.com:cloudyhome/homelab.git
+    url: git@github.com:cloudyhomelab/homelab.git
     deploy_key_file: /etc/controlplane/keys/homelab
     known_hosts_file: /etc/controlplane/known_hosts
 
@@ -21,7 +21,7 @@ env_profiles:
 
 actions:
   homelab.plan:
-    description: terraform plan in a given directory of cloudyhome/homelab
+    description: terraform plan in a given directory of cloudyhomelab/homelab
     repo: homelab_public
     env_profile: homelab
     allowed_refs: ["refs/pull/*/merge", "refs/heads/main"]
@@ -34,7 +34,7 @@ actions:
       - [/usr/local/bin/terraform, "-chdir={{ .dir }}", init, -input=false, -no-color]
       - [/usr/local/bin/terraform, "-chdir={{ .dir }}", plan, -input=false, -no-color, "-out={{ .job_dir }}/tfplan"]
     allow:
-      - repository: cloudyhome/homelab
+      - repository: cloudyhomelab/homelab
         event_name: [pull_request, push]
 
   homelab.apply:
@@ -48,6 +48,6 @@ actions:
       - [/usr/local/bin/terraform, "-chdir={{ .dir }}", apply, -input=false, -no-color, "{{ .input_dir }}/tfplan"]
     approvers: [binarycodes]
     allow:
-      - repository: cloudyhome/homelab
+      - repository: cloudyhomelab/homelab
         ref: refs/heads/main
         environment: production

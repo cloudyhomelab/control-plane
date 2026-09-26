@@ -1,0 +1,9 @@
+name: Set up the build tools
+description: Go from go.mod, and Task, whose Taskfile pins changie.
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-go@v5
+      with:
+        go-version-file: go.mod
+    - uses: go-task/setup-task@v1

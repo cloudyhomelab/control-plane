@@ -6,8 +6,8 @@ import (
 	"sort"
 	"time"
 
-	"github.com/cloudyhome/controlplane/internal/config"
-	"github.com/cloudyhome/controlplane/internal/jobs"
+	"github.com/cloudyhomelab/control-plane/internal/config"
+	"github.com/cloudyhomelab/control-plane/internal/jobs"
 )
 
 type statusWriter struct {

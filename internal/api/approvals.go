@@ -7,9 +7,9 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/cloudyhome/controlplane/internal/config"
-	"github.com/cloudyhome/controlplane/internal/github"
-	"github.com/cloudyhome/controlplane/internal/policy"
+	"github.com/cloudyhomelab/control-plane/internal/config"
+	"github.com/cloudyhomelab/control-plane/internal/github"
+	"github.com/cloudyhomelab/control-plane/internal/policy"
 )
 
 type approvalSource interface {

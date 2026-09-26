@@ -15,13 +15,16 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/cloudyhome/controlplane/internal/api"
-	"github.com/cloudyhome/controlplane/internal/auth"
-	"github.com/cloudyhome/controlplane/internal/config"
-	"github.com/cloudyhome/controlplane/internal/github"
-	"github.com/cloudyhome/controlplane/internal/jobs"
-	"github.com/cloudyhome/controlplane/internal/source"
+	"github.com/cloudyhomelab/control-plane/internal/api"
+	"github.com/cloudyhomelab/control-plane/internal/auth"
+	"github.com/cloudyhomelab/control-plane/internal/config"
+	"github.com/cloudyhomelab/control-plane/internal/github"
+	"github.com/cloudyhomelab/control-plane/internal/jobs"
+	"github.com/cloudyhomelab/control-plane/internal/source"
 )
+
+// Set by release builds with -ldflags "-X main.version=X.Y.Z".
+var version = "dev"
 
 func main() {
 	if err := run(); err != nil {
@@ -36,7 +39,13 @@ func run() error {
 	dataDir := flag.String("data-dir", "/var/lib/controlplane", "state directory")
 	devAuth := flag.Bool("insecure-dev-auth", false, "accept unsigned base64 JSON claims as tokens (loopback only)")
 	check := flag.Bool("check", false, "validate the catalog and exit")
+	showVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Println(version)
+		return nil
+	}
 
 	cfg, err := config.Load(*cfgFile)
 	if err != nil {

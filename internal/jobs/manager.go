@@ -12,9 +12,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cloudyhome/controlplane/internal/config"
-	"github.com/cloudyhome/controlplane/internal/logs"
-	"github.com/cloudyhome/controlplane/internal/source"
+	"github.com/cloudyhomelab/control-plane/internal/config"
+	"github.com/cloudyhomelab/control-plane/internal/logs"
+	"github.com/cloudyhomelab/control-plane/internal/source"
 )
 
 var (

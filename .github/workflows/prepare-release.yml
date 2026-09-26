@@ -1,0 +1,249 @@
+name: Prepare release
+
+# When a pull request labelled `prepare-release` merges into main, fold the waiting fragments
+# into .changes/X.Y.Z.md, regenerate CHANGELOG.md and open the release PR from release/X.Y.Z,
+# labelled `release-X.Y.Z` for tag-release.yml and set to auto-merge once `prepare` approves.
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+  # The recovery when the label was forgotten or a refusal has been fixed on main.
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "major, minor, patch, or an explicit X.Y.Z; empty for the bump the fragments imply"
+        required: false
+        type: string
+
+# Two labelled PRs merged back to back: the second waits, then refuses on the first's branch.
+concurrency:
+  group: prepare-release
+  cancel-in-progress: false
+
+# Everything that writes uses the App's token: a PR opened with GITHUB_TOKEN gets no Checks run.
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    name: Prepare the release pull request
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      || (github.event.pull_request.merged == true
+          && contains(format(' {0} ', join(github.event.pull_request.labels.*.name, ' ')), ' prepare-release'))
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Mint a token for the App
+        id: app
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ secrets.CLOUDYHOME_BOT_CLIENT_ID }}
+          private-key: ${{ secrets.CLOUDYHOME_BOT_PRIVATE_KEY }}
+
+      # Every refusal goes through this, so the comment on the origin PR can quote it.
+      - name: Provide the refuse command
+        run: |
+          cat > "$RUNNER_TEMP/refuse" <<'EOF'
+          #!/usr/bin/env bash
+          printf '%s\n' "$@" | tee -a "$RUNNER_TEMP/refusal.md" >&2
+          echo "::error::$1"
+          exit 1
+          EOF
+          chmod +x "$RUNNER_TEMP/refuse"
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+
+      - name: Read the bump from the label
+        id: bump
+        env:
+          LABELS: ${{ join(github.event.pull_request.labels.*.name, ' ') }}
+          INPUT: ${{ inputs.bump }}
+        run: |
+          shape='(major|minor|patch|[0-9]+\.[0-9]+\.[0-9]+)'
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+            grep -qE "^$shape?\$" <<< "$INPUT" \
+              || refuse "The bump input is '$INPUT'; it must be major, minor, patch, X.Y.Z or empty."
+            bump="$INPUT"
+          else
+            matches="$(tr ' ' '\n' <<< "$LABELS" | grep -E "^prepare-release(-$shape)?\$" || true)"
+            case "$(wc -w <<< "$matches")" in
+              1) bump="${matches#prepare-release}"; bump="${bump#-}" ;;
+              0) refuse "No label prepare-release or prepare-release-<major|minor|patch|X.Y.Z> on this pull request; its labels are: $LABELS" ;;
+              *) refuse "More than one prepare-release label on this pull request: $(tr '\n' ' ' <<< "$matches")" ;;
+            esac
+          fi
+          echo "bump=$bump" >> "$GITHUB_OUTPUT"
+
+      # main's tip, whatever the origin PR merged as: a release folds everything on main.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.ref || 'main' }}
+          fetch-depth: 0
+          token: ${{ steps.app.outputs.token }}
+
+      - name: Set the App as the git identity
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          SLUG: ${{ steps.app.outputs.app-slug }}
+        run: |
+          id="$(gh api "/users/${SLUG}[bot]" --jq .id)"
+          git config user.name "${SLUG}[bot]"
+          git config user.email "${id}+${SLUG}[bot]@users.noreply.github.com"
+
+      - uses: ./.github/actions/setup-tools
+
+      # changie folds without a summary, which is how a release ships with no opening paragraph.
+      - name: Check fragments and a release summary are waiting
+        run: |
+          [ -n "$(find .changes/unreleased -name '*.yaml')" ] \
+            || refuse "No fragment is waiting in .changes/unreleased/; nothing to release."
+          [ -s .changes/unreleased/summary.md ] \
+            || refuse "No .changes/unreleased/summary.md; land the release summary first."
+
+      # The kinds' `auto` levels in .changie.yaml decide the implied bump.
+      - name: Resolve the version
+        id: version
+        env:
+          BUMP: ${{ steps.bump.outputs.bump }}
+        run: |
+          current="$(task changie -- latest)"; current="${current#v}"
+          implied_version="$(task changie -- next auto)" || refuse "changie could not read the fragments' kinds."
+          implied_version="${implied_version#v}"
+          component() {
+            IFS=. read -r a b _ <<< "$1"; IFS=. read -r x y _ <<< "$2"
+            if [ "$a" != "$x" ]; then echo major; elif [ "$b" != "$y" ]; then echo minor; else echo patch; fi
+          }
+          implied="$(component "$current" "$implied_version")"
+          case "${BUMP:-$implied}" in
+            major|minor|patch)
+              bump="${BUMP:-$implied}"
+              new="$(task changie -- next "$bump")"; new="${new#v}" ;;
+            *)
+              new="$BUMP"
+              if [ "$new" = "$current" ] \
+                 || [ "$(printf '%s\n%s\n' "$current" "$new" | sort -V | tail -1)" != "$new" ]; then
+                refuse "$new is not above the current version $current."
+              fi
+              bump="$(component "$current" "$new")" ;;
+          esac
+          rank() { case "$1" in major) echo 3 ;; minor) echo 2 ;; patch) echo 1 ;; esac; }
+          if [ "$(rank "$bump")" -lt "$(rank "$implied")" ]; then
+            refuse "The fragments call for a $implied bump, not $bump:" \
+              $(grep -lE '^kind: (Breaking|Removed|Added|Changed|Deprecated)$' .changes/unreleased/*.yaml)
+          fi
+          echo "Releasing $new after $current: a $bump bump."
+          echo "version=$new" >> "$GITHUB_OUTPUT"
+
+      - name: Check the release branch does not exist
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if [ -n "$(git ls-remote --heads origin "refs/heads/release/$VERSION")" ]; then
+            refuse "Branch release/$VERSION already exists on origin; a release PR for it is open or was abandoned without deleting the branch."
+          fi
+
+      - name: Fold the fragments
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          git switch -c "release/$VERSION"
+          task changie -- batch "$VERSION"
+          task changie -- merge
+          [ -s ".changes/$VERSION.md" ] || refuse "changie wrote no .changes/$VERSION.md."
+
+      - name: Run the fast gates
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: task fmt:check build VERSION="$VERSION"
+
+      - name: Write the release notes
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          ORIGIN: >-
+            ${{ github.event_name == 'pull_request'
+                && format('Prepared from #{0} by Prepare release.', github.event.pull_request.number)
+                || 'Prepared by a dispatch of Prepare release.' }}
+        run: |
+          { echo "$ORIGIN"; echo; sed 1d ".changes/$VERSION.md"; } > "$RUNNER_TEMP/body.md"
+
+      # One commit, the unit a revert brings the fragments back with.
+      - name: Commit, push and open the release pull request
+        id: pr
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          git add .changes CHANGELOG.md
+          git commit -m "chore(release): $VERSION"
+          git push -u origin "release/$VERSION"
+          gh label create "release-$VERSION" --force --color 0e8a16 \
+            --description "Merging this release pull request tags v$VERSION"
+          url="$(gh pr create --base main --head "release/$VERSION" \
+            --title "chore(release): $VERSION" --body-file "$RUNNER_TEMP/body.md" \
+            --label "release-$VERSION")"
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+
+      # Only while a required check blocks the PR: auto-merge on a PR nothing blocks merges it on
+      # the spot, skipping the `prepare` approval. UNKNOWN is GitHub still computing the state.
+      - name: Enable auto-merge on the release pull request
+        id: automerge
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          URL: ${{ steps.pr.outputs.url }}
+        run: |
+          for attempt in 1 2 3 4 5 6; do
+            state="$(gh pr view "$URL" --json mergeStateStatus --jq .mergeStateStatus)"
+            [ "$state" = UNKNOWN ] || break
+            sleep 10
+          done
+          echo "Merge state: $state"
+          if [ "$state" = BLOCKED ] && gh pr merge --auto --squash "$URL"; then
+            merges="itself once the \`prepare\` environment is approved on its Checks run and every check is green"
+          else
+            echo "::warning::Auto-merge not enabled (merge state $state). Merge by hand once the \`prepare\` environment is approved."
+            merges="by hand: auto-merge was not enabled (merge state $state), so once the \`prepare\` environment is approved on its Checks run, press Merge"
+          fi
+          echo "merges=$merges" >> "$GITHUB_OUTPUT"
+
+      - name: Report the release pull request
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          URL: ${{ steps.pr.outputs.url }}
+          MERGES: ${{ steps.automerge.outputs.merges }}
+          VERSION: ${{ steps.version.outputs.version }}
+          ORIGIN: ${{ github.event.pull_request.number }}
+        run: |
+          {
+            echo "Release pull request for $VERSION: $URL"
+            echo
+            echo "It merges $MERGES. The merge is tagged \`v$VERSION\`, and the tag starts the"
+            echo "Release run, where the publish itself is approved."
+          } > "$RUNNER_TEMP/comment.md"
+          cat "$RUNNER_TEMP/comment.md" >> "$GITHUB_STEP_SUMMARY"
+          if [ -n "$ORIGIN" ]; then
+            gh pr comment "$ORIGIN" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/comment.md"
+          fi
+
+      - name: Report the refusal
+        if: failure() && github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          ORIGIN: ${{ github.event.pull_request.number }}
+        run: |
+          {
+            echo "Prepare release did not open a release pull request."
+            echo
+            if [ -s "$RUNNER_TEMP/refusal.md" ]; then
+              echo "It refused:"
+              echo
+              sed 's/^/> /' "$RUNNER_TEMP/refusal.md"
+              echo
+              echo "Fix this on \`main\`, then dispatch Prepare release from the Actions tab."
+            else
+              echo "A step failed; see the run. Once the cause is fixed, dispatch Prepare release from the Actions tab."
+            fi
+            echo
+            echo "Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          } > "$RUNNER_TEMP/comment.md"
+          cat "$RUNNER_TEMP/comment.md" >> "$GITHUB_STEP_SUMMARY"
+          gh pr comment "$ORIGIN" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/comment.md"

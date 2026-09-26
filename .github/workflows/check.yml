@@ -1,38 +1,170 @@
 name: check
 
-on: push
+# The one workflow a pull request triggers; all-checks-passed is the single required check.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: check-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
 
 jobs:
-  check:
+  # A release pull request is one that adds .changes/X.Y.Z.md: the fact, not the label, so a
+  # release PR opened by hand is gated all the same.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      release: ${{ steps.release.outputs.release }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check whether this is a release
+        id: release
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          release=false
+          if [ -n "$BASE" ]; then
+            added="$(git diff --name-only --diff-filter=A "$BASE" "$GITHUB_SHA" -- '.changes/*.md' \
+              | grep -E '^\.changes/[0-9]+\.[0-9]+\.[0-9]+\.md$' || true)"
+            case "$(wc -w <<< "$added")" in
+              0) ;;
+              1) release=true; version="$(basename "$added" .md)"; echo "Release pull request for $version." ;;
+              *) echo "::error::More than one version added: $added" >&2; exit 1 ;;
+            esac
+          fi
+          echo "release=$release" >> "$GITHUB_OUTPUT"
+          echo "version=${version:-}" >> "$GITHUB_OUTPUT"
+
+  # Every pull request records itself in a fragment. A PR that changes a released version's
+  # notes records itself there instead: the release PR, or a fix folded into a version.
+  fragment:
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
-      - uses: go-task/setup-task@v1
-      - name: Format
-        run: task fmt:check
-      - name: Build
-        run: task build
-      - name: Vet
-        run: task vet
-      - name: Test
-        run: task test
+          fetch-depth: 0
+      - name: Require a fragment, or a change to a version's notes
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          added="$(git diff --name-only --diff-filter=A "$BASE" "$GITHUB_SHA" -- '.changes/unreleased/*.yaml')"
+          versions="$(git diff --name-only "$BASE" "$GITHUB_SHA" -- '.changes/*.md' \
+            | grep -E '^\.changes/[0-9]+\.[0-9]+\.[0-9]+\.md$' || true)"
+          if [ -n "$added" ]; then
+            echo "Fragment added: $added"
+          elif [ -n "$versions" ]; then
+            echo "Version notes change: $versions"
+          else
+            echo "::error::This pull request adds no changelog fragment. Run 'task changie -- new';" \
+                 "RELEASE.md lists the kinds." >&2
+            exit 1
+          fi
 
-  # The single required status check; add every new job to needs.
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  # The release PR's Checks run carries the decision: this job writes the brief, and approve
+  # waits on the `prepare` environment. Two jobs, so the brief is on the page while the
+  # approval waits.
+  release-brief:
+    name: Release brief
+    needs: changes
+    if: needs.changes.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      # The branch tip, not GitHub's synthetic merge commit, which would head the commit list.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - uses: ./.github/actions/setup-tools
+
+      - name: Check the version is the latest and not yet released
+        env:
+          VERSION: ${{ needs.changes.outputs.version }}
+        run: |
+          latest="$(task changie -- latest)"; latest="${latest#v}"
+          if [ "$latest" != "$VERSION" ]; then
+            echo "::error::The PR adds $VERSION but the latest version in .changes/ is $latest." >&2
+            exit 1
+          fi
+          if git ls-remote --exit-code --tags origin "refs/tags/v$VERSION" >/dev/null; then
+            echo "::error::Tag v$VERSION already exists." >&2
+            exit 1
+          fi
+
+      - name: Check the changelog
+        run: task changelog:check
+
+      - name: Build
+        run: task build VERSION=${{ needs.changes.outputs.version }}
+
+      - uses: ./.github/actions/release-brief
+        with:
+          version: ${{ needs.changes.outputs.version }}
+          heading: Merging this PR tags and releases ${{ needs.changes.outputs.version }}
+          intro: >-
+            Pull request #${{ github.event.pull_request.number }} at
+            `${{ github.event.pull_request.head.sha }}`. Approving the `prepare` environment lets
+            it merge; the merge is tagged, and the tag starts the Release run, where the
+            publish itself is approved.
+
+  # Configure `prepare` with a required reviewer; without it this job simply runs.
+  approve:
+    name: Approve the release
+    needs: [changes, release-brief]
+    if: needs.changes.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    environment: prepare
+    permissions:
+      actions: read
+    steps:
+      - name: Record the approval
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          approver="$(gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/approvals" \
+            --jq '[.[] | select(.state == "approved") | .user.login] | join(", ")' 2>/dev/null || true)"
+          {
+            echo "## Release approved"
+            echo
+            echo "Approved${approver:+ by $approver} at $(date -u +%Y-%m-%dT%H:%M:%SZ). The pull request"
+            echo "merges once every other check is green; Tag release then tags the merge commit."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # The single required status check. always(), since GitHub shows a skipped required check as
+  # pending. On a release PR the brief and approval must pass; otherwise they must skip.
   all-checks-passed:
     if: always()
-    needs: [check]
+    needs: [changes, fragment, ci, release-brief, approve]
     runs-on: ubuntu-latest
     steps:
       - name: Require every job to succeed
         env:
-          RESULTS: ${{ join(needs.*.result, ' ') }}
+          RELEASE: ${{ needs.changes.outputs.release }}
+          CHANGES: ${{ needs.changes.result }}
+          FRAGMENT: ${{ needs.fragment.result }}
+          CI: ${{ needs.ci.result }}
+          BRIEF: ${{ needs.release-brief.result }}
+          APPROVE: ${{ needs.approve.result }}
         run: |
-          for result in $RESULTS; do
-            [ "$result" = success ] || { echo "a required job ended with: $result"; exit 1; }
-          done
+          echo "changes=$CHANGES fragment=$FRAGMENT ci=$CI release=$RELEASE release-brief=$BRIEF approve=$APPROVE"
+          if [ "$RELEASE" = true ]; then expected=success; else expected=skipped; fi
+          if [ "$CHANGES" = success ] && [ "$CI" = success ] \
+             && { [ "$FRAGMENT" = success ] || [ "$FRAGMENT" = skipped ]; } \
+             && [ "$BRIEF" = "$expected" ] && [ "$APPROVE" = "$expected" ]; then
+            echo "Every job passed."
+          else
+            echo "::error::A required job did not pass." >&2
+            exit 1
+          fi

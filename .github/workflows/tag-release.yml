@@ -1,0 +1,142 @@
+name: Tag release
+
+# Tags the merge commit of a PR labelled `release-X.Y.Z` as vX.Y.Z, which starts release.yml.
+# Merging the release PR without its label is how a release commit lands untagged on purpose.
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+  # The recovery when the label was removed or this run failed after the merge: tags main's tip.
+  workflow_dispatch:
+
+# Never cancelled: a run stopped after the push has already started a release.
+concurrency:
+  group: tag-release
+  cancel-in-progress: false
+
+# The push uses the App's token: a tag pushed with GITHUB_TOKEN starts no workflow.
+permissions:
+  contents: read
+
+jobs:
+  tag:
+    name: Tag the release commit
+    # Padded so `prepare-release-*` is not mistaken for a `release-` label.
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      || (github.event.pull_request.merged == true
+          && contains(format(' {0} ', join(github.event.pull_request.labels.*.name, ' ')), ' release-'))
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Read the version from the release label
+        id: label
+        if: github.event_name == 'pull_request'
+        env:
+          LABELS: ${{ join(github.event.pull_request.labels.*.name, ' ') }}
+        run: |
+          matches="$(tr ' ' '\n' <<< "$LABELS" | grep -E '^release-[0-9]+\.[0-9]+\.[0-9]+$' || true)"
+          case "$(wc -w <<< "$matches")" in
+            1) echo "version=${matches#release-}" >> "$GITHUB_OUTPUT" ;;
+            0) echo "::error::No label of the form release-X.Y.Z on this pull request; its labels are: $LABELS" >&2; exit 1 ;;
+            *) echo "::error::More than one release label on this pull request: $(tr '\n' ' ' <<< "$matches")" >&2; exit 1 ;;
+          esac
+
+      - name: Mint a token for the App
+        id: app
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ secrets.CLOUDYHOME_BOT_CLIENT_ID }}
+          private-key: ${{ secrets.CLOUDYHOME_BOT_PRIVATE_KEY }}
+
+      # The merge commit and nothing later: main may have moved on by the time this runs.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha || 'main' }}
+          fetch-depth: 0
+          token: ${{ steps.app.outputs.token }}
+
+      - name: Set the App as the git identity
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          SLUG: ${{ steps.app.outputs.app-slug }}
+        run: |
+          id="$(gh api "/users/${SLUG}[bot]" --jq .id)"
+          git config user.name "${SLUG}[bot]"
+          git config user.email "${id}+${SLUG}[bot]@users.noreply.github.com"
+
+      - uses: ./.github/actions/setup-tools
+
+      - name: Resolve the version from .changes/
+        id: version
+        run: |
+          latest="$(task changie -- latest)"; latest="${latest#v}"
+          if [ ! -s ".changes/$latest.md" ]; then
+            echo "::error::No released version in .changes/ (latest reads '$latest')." >&2
+            exit 1
+          fi
+          echo "version=$latest" >> "$GITHUB_OUTPUT"
+
+      # A difference is a release branch edited after it was labelled, or a label on the wrong PR.
+      - name: Check the label names the latest version
+        if: github.event_name == 'pull_request'
+        env:
+          LABEL: ${{ steps.label.outputs.version }}
+          LATEST: ${{ steps.version.outputs.version }}
+        run: |
+          if [ "$LABEL" != "$LATEST" ]; then
+            echo "::error::Label release-$LABEL, but the latest version in .changes/ is $LATEST." >&2
+            exit 1
+          fi
+
+      # A fragment still here is a change the tag would ship that the notes leave out.
+      - name: Check no fragment is waiting
+        run: |
+          waiting="$(find .changes/unreleased -type f ! -name '.gitkeep' | sort)"
+          if [ -n "$waiting" ]; then
+            echo "::error::Fragments not folded into this release: $(tr '\n' ' ' <<< "$waiting")" >&2
+            exit 1
+          fi
+
+      - name: Check the tag does not exist
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if [ -n "$(git ls-remote --tags origin "refs/tags/v$VERSION")" ]; then
+            echo "::error::Tag v$VERSION already exists on origin." >&2
+            exit 1
+          fi
+
+      # --cleanup=whitespace: the notes' `###` headings would otherwise be stripped as comments.
+      - name: Tag and push
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          { echo "controlplane $VERSION"; sed 1d ".changes/$VERSION.md"; } > "$RUNNER_TEMP/tag-message.md"
+          git tag -a "v$VERSION" --cleanup=whitespace -F "$RUNNER_TEMP/tag-message.md"
+          git push origin "v$VERSION"
+          {
+            echo "## Tagged v$VERSION"
+            echo
+            echo "\`v$VERSION\` at \`$(git rev-parse HEAD)\`, pushed. The Release run it starts is"
+            echo "where the publish is approved."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Report on the release pull request
+        if: always() && github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          NUMBER: ${{ github.event.pull_request.number }}
+          VERSION: ${{ steps.version.outputs.version }}
+          OUTCOME: ${{ job.status }}
+        run: |
+          repo="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"
+          if [ "$OUTCOME" = success ]; then
+            body="Tagged \`v$VERSION\` and pushed it. The Release run it starts is where the publish"
+            body="$body is approved: $repo/actions/workflows/release.yml"
+          else
+            body="Tag release did not tag this merge; the run says which check refused:"
+            body="$body $repo/actions/runs/$GITHUB_RUN_ID. Once the cause is fixed on \`main\`, run Tag"
+            body="$body release from the Actions tab, which tags \`main\`'s tip."
+          fi
+          gh pr comment "$NUMBER" --repo "$GITHUB_REPOSITORY" --body "$body"

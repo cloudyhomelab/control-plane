@@ -1,0 +1,163 @@
+name: Release
+
+# Consumers pin the action and the binaries by tag, so a published version is never replaced,
+# only superseded. Most of this workflow is refusals; the publish is one step near the end.
+on:
+  push:
+    tags: ['v[0-9]+.[0-9]+.[0-9]+']
+  # From a tag: retry a release whose publish failed. From a branch: a rehearsal that publishes
+  # nothing. The ref decides which, not an input.
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify the release is coherent
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      release: ${{ steps.version.outputs.release }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/setup-tools
+
+      # The tag has to agree with .changes/ rather than be believed: a tag pushed by hand on
+      # the wrong commit is how a version ships under a number nobody meant.
+      - name: Resolve the version and check the tag against .changes/
+        id: version
+        run: |
+          latest="$(task changie -- latest)"; latest="${latest#v}"
+          if [ ! -s ".changes/$latest.md" ]; then
+            echo "::error::No released version in .changes/ (latest reads '$latest')." >&2
+            exit 1
+          fi
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            if [ "${GITHUB_REF_NAME#v}" != "$latest" ]; then
+              echo "::error::Tag $GITHUB_REF_NAME, but the latest version in .changes/ is $latest." >&2
+              exit 1
+            fi
+            echo "release=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::Rehearsal of $latest from branch $GITHUB_REF_NAME. Nothing is published."
+            echo "release=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "version=$latest" >> "$GITHUB_OUTPUT"
+
+      - name: Check the changelog
+        run: task changelog:check
+
+      - name: Check no GitHub release exists for the version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if gh release view "v$VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::error::A GitHub release v$VERSION already exists, and a version is not replaced." >&2
+            exit 1
+          fi
+
+      - name: Build
+        run: task build VERSION=${{ steps.version.outputs.version }}
+
+      # On the page by the time the publish waits for approval.
+      - uses: ./.github/actions/release-brief
+        with:
+          version: ${{ steps.version.outputs.version }}
+          heading: >-
+            ${{ steps.version.outputs.release == 'true'
+                && format('Approving publishes {0}', steps.version.outputs.version)
+                || format('Rehearsal of {0}', steps.version.outputs.version) }}
+          intro: >-
+            ${{ steps.version.outputs.release == 'true'
+                && format('Tag `{0}` at `{1}`.', github.ref_name, github.sha)
+                || format('From branch `{0}` at `{1}`. Nothing is published.', github.ref_name, github.sha) }}
+
+  # Called against the tagged commit rather than trusting main's tick: a tag can point anywhere.
+  ci:
+    name: Gate - ci
+    needs: verify
+    uses: ./.github/workflows/ci.yml
+
+  # The stop button: configure `release` with a required reviewer, or this job simply runs.
+  publish:
+    name: >-
+      ${{ needs.verify.outputs.release == 'true' && 'Publish' || 'Rehearse' }}
+      ${{ needs.verify.outputs.version }}
+    needs: [verify, ci]
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-tools
+
+      - name: Build
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          task build VERSION="$VERSION"
+          (cd bin && sha256sum * > SHA256SUMS && cat SHA256SUMS)
+          [ "$(bin/linux-amd64-controlplane -version)" = "$VERSION" ]
+
+      - name: Create the GitHub release
+        if: needs.verify.outputs.release == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          sed 1d ".changes/$VERSION.md" > "$RUNNER_TEMP/notes.md"
+          gh release create "v$VERSION" --verify-tag --title "v$VERSION" \
+            --notes-file "$RUNNER_TEMP/notes.md" bin/*
+
+      - name: Report what a release would have done
+        if: needs.verify.outputs.release != 'true'
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          {
+            echo "## Rehearsal built $VERSION"
+            echo
+            echo "Every check ran. A \`v$VERSION\` tag would have attached these to a GitHub release:"
+            echo
+            echo '```'
+            cat bin/SHA256SUMS
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # What a consumer sees, from a runner with none of this checkout. A failure is a note to
+  # look by hand, not a rollback.
+  verify-published:
+    name: Verify ${{ needs.verify.outputs.version }} is downloadable
+    needs: [verify, publish]
+    if: needs.verify.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download the release and check it
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          gh release download "v$VERSION" --repo "$GITHUB_REPOSITORY" --dir dist
+          cd dist
+          sha256sum -c SHA256SUMS
+          chmod +x linux-amd64-*
+          [ "$(./linux-amd64-controlplane -version)" = "$VERSION" ]
+          [ "$(./linux-amd64-cpctl version)" = "$VERSION" ]
+          {
+            echo "## $VERSION is published"
+            echo
+            echo "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/v$VERSION"
+            echo
+            echo '```'
+            cat SHA256SUMS
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

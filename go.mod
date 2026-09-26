@@ -1,4 +1,4 @@
-module github.com/cloudyhome/controlplane
+module github.com/cloudyhomelab/control-plane
 
 go 1.27.0
 

@@ -48,17 +48,17 @@ func (testIssuer *issuer) sign(t *testing.T, key *rsa.PrivateKey, claims map[str
 
 func TestOIDC(t *testing.T) {
 	iss := newIssuer(t)
-	verifier := NewOIDC(context.Background(), "https://issuer.test", iss.srv.URL, "cp", "cloudyhome")
+	verifier := NewOIDC(context.Background(), "https://issuer.test", iss.srv.URL, "cp", "cloudyhomelab")
 	now := time.Now()
 	good := func() map[string]any {
 		return map[string]any{
 			"iss":              "https://issuer.test",
 			"aud":              "cp",
-			"sub":              "repo:cloudyhome/infra:ref:refs/heads/main",
+			"sub":              "repo:cloudyhomelab/infra:ref:refs/heads/main",
 			"iat":              now.Unix(),
 			"exp":              now.Add(5 * time.Minute).Unix(),
-			"repository":       "cloudyhome/infra",
-			"repository_owner": "cloudyhome",
+			"repository":       "cloudyhomelab/infra",
+			"repository_owner": "cloudyhomelab",
 			"ref":              "refs/heads/main",
 			"run_id":           "42",
 		}
@@ -68,7 +68,7 @@ func TestOIDC(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if claims["repository"] != "cloudyhome/infra" || claims["run_id"] != "42" {
+	if claims["repository"] != "cloudyhomelab/infra" || claims["run_id"] != "42" {
 		t.Errorf("claims = %v", claims)
 	}
 
@@ -95,9 +95,9 @@ func with(claims map[string]any, key string, value any) map[string]any {
 }
 
 func TestDev(t *testing.T) {
-	dev := Dev{AllowedOrg: "cloudyhome"}
-	claims, err := dev.Verify(context.Background(), DevToken(map[string]string{"repository": "cloudyhome/x", "repository_owner": "cloudyhome"}))
-	if err != nil || claims["repository"] != "cloudyhome/x" {
+	dev := Dev{AllowedOrg: "cloudyhomelab"}
+	claims, err := dev.Verify(context.Background(), DevToken(map[string]string{"repository": "cloudyhomelab/x", "repository_owner": "cloudyhomelab"}))
+	if err != nil || claims["repository"] != "cloudyhomelab/x" {
 		t.Fatalf("%v %v", claims, err)
 	}
 	if _, err := dev.Verify(context.Background(), DevToken(map[string]string{"repository": "evil/x", "repository_owner": "evil"})); err == nil {

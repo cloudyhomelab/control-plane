@@ -179,10 +179,17 @@ object of claims as the bearer token:
 ```sh
 go run ./cmd/controlplane -config examples/dev-catalog.yml -data-dir ./data -insecure-dev-auth &
 export CONTROLPLANE_URL=http://127.0.0.1:8080
-export CONTROLPLANE_TOKEN=$(go run ./cmd/cpctl dev-token repository=cloudyhome/infra ref=refs/heads/main)
+export CONTROLPLANE_TOKEN=$(go run ./cmd/cpctl dev-token repository=cloudyhomelab/infra ref=refs/heads/main)
 go run ./cmd/cpctl run host.uptime
 ```
 
 ## Tests
 
 `task test` (or `go test ./...`); `task check` runs everything CI does, `task fmt` formats. Job runs use the test binary as a fake terraform, so no tools are needed.
+
+## Releases
+
+Tagged `vX.Y.Z` releases carry linux amd64 and arm64 binaries of `controlplane` and `cpctl`
+with a `SHA256SUMS` file; `controlplane -version` and `cpctl version` report the version.
+Every pull request adds a changelog fragment (`task changie -- new`). [RELEASE.md](RELEASE.md)
+is how a release is cut.

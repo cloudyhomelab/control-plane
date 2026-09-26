@@ -13,8 +13,8 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/cloudyhome/controlplane/internal/params"
-	"github.com/cloudyhome/controlplane/internal/policy"
+	"github.com/cloudyhomelab/control-plane/internal/params"
+	"github.com/cloudyhomelab/control-plane/internal/policy"
 )
 
 const GitHubIssuer = "https://token.actions.githubusercontent.com"

@@ -1,9 +1,9 @@
-# How `uses: cloudyhome/controlplane/action@main` works
+# How `uses: cloudyhomelab/control-plane/action@main` works
 
 This explains the workflow step that calls the control plane:
 
 ```yaml
-- uses: cloudyhome/controlplane/action@main
+- uses: cloudyhomelab/control-plane/action@main
   with:
     server: ${{ env.CP_SERVER }}
     audience: ${{ env.CP_AUDIENCE }}
@@ -19,21 +19,21 @@ action is the `action/` folder of the controlplane repo.
 ## 1. Reading the `uses:` string
 
 ```
-cloudyhome/controlplane/action@main
+cloudyhomelab/control-plane/action@main
 └──┬─────┘ └────┬─────┘ └─┬──┘ └┬─┘
   owner       repo      path   git ref (branch, tag or commit SHA)
 ```
 
 When the job reaches this step, the runner:
 
-1. Downloads `github.com/cloudyhome/controlplane` at `main`. It does this itself, before any
+1. Downloads `github.com/cloudyhomelab/control-plane` at `main`. It does this itself, before any
    step runs; you don't need `actions/checkout` for it.
 2. Goes into the `action/` subfolder and reads `action/action.yml`. That file is what makes a
    folder an action.
 3. Sees `runs: using: composite`, so it runs the steps listed in that file inside your job,
    on the same runner.
 
-Without a path (`cloudyhome/controlplane@main`), it would look for `action.yml` at the repo
+Without a path (`cloudyhomelab/control-plane@main`), it would look for `action.yml` at the repo
 root. The subfolder keeps the action separate from the server code.
 
 ## 2. `with:` fills the action's inputs
@@ -76,7 +76,7 @@ The composite action runs three steps from `action/action.yml`.
 ```
 
 `github.action_path` is where the runner downloaded the action, i.e.
-`.../cloudyhome/controlplane/main/action`, so `../go.mod` is the controlplane repo's `go.mod`.
+`.../cloudyhomelab/control-plane/main/action`, so `../go.mod` is the controlplane repo's `go.mod`.
 
 **Step 2: build `cpctl`** from that same download:
 
@@ -134,12 +134,12 @@ plan:
     job_id: ${{ steps.plan.outputs.job_id }}   # step output -> job output
   steps:
     - id: plan                                 # the id makes steps.plan.* work
-      uses: cloudyhome/controlplane/action@main
+      uses: cloudyhomelab/control-plane/action@main
       ...
 apply:
   needs: plan
   steps:
-    - uses: cloudyhome/controlplane/action@main
+    - uses: cloudyhomelab/control-plane/action@main
       with:
         action: network.apply
         input-job: ${{ needs.plan.outputs.job_id }}
@@ -149,9 +149,9 @@ apply:
 
 - **Permissions:** the calling workflow needs `permissions: id-token: write`. Without it the
   runner won't hand out an OIDC token, and `cpctl` fails with "no OIDC token available".
-- **Private repo:** if `cloudyhome/controlplane` is private, other repos can only use its
+- **Private repo:** if `cloudyhomelab/control-plane` is private, other repos can only use its
   action after you set Settings > Actions > General > Access to "Accessible from repositories
-  in the 'cloudyhome' organization".
+  in the 'cloudyhomelab' organization".
 - **`@main` is a moving target:** every run uses whatever `main` is at that moment, so a push
   to the controlplane repo changes every workflow that uses it. Once it's stable, pin to a tag
   (`@v1`) or a full commit SHA. A SHA can't be moved.

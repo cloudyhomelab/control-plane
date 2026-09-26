@@ -11,7 +11,7 @@ import (
 
 	_ "modernc.org/sqlite"
 
-	"github.com/cloudyhome/controlplane/internal/policy"
+	"github.com/cloudyhomelab/control-plane/internal/policy"
 )
 
 type Status string

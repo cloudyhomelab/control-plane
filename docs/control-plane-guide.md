@@ -149,7 +149,7 @@ network.apply:
     - [/usr/local/bin/terraform, init, -input=false, -no-color]
     - [/usr/local/bin/terraform, apply, -input=false, -no-color, "{{ .input_dir }}/tfplan"]
   allow:
-    - { repository: cloudyhome/infra, ref: refs/heads/main, environment: production }
+    - { repository: cloudyhomelab/infra, ref: refs/heads/main, environment: production }
 ```
 
 The caller passes the plan job's id (`cpctl run -input-job <id> network.apply`). The server:
@@ -169,7 +169,7 @@ when the state changed since the plan or the plan was already applied.
 
 ## 3. Adding and allowing a new command: `uptime`
 
-Say you want workflows in `cloudyhome/infra` to be able to see how long the host has been up.
+Say you want workflows in `cloudyhomelab/infra` to be able to see how long the host has been up.
 
 ### Step 1: find the absolute path of the binary
 
@@ -191,7 +191,7 @@ actions:
     steps:
       - [/usr/bin/uptime, --pretty]
     allow:
-      - repository: cloudyhome/infra
+      - repository: cloudyhomelab/infra
 ```
 
 What each line does:
@@ -211,20 +211,20 @@ call is allowed. Values can be one string or a list, and `*` matches anything (i
 
 ```yaml
 allow:
-  # any workflow in cloudyhome/infra
-  - repository: cloudyhome/infra
+  # any workflow in cloudyhomelab/infra
+  - repository: cloudyhomelab/infra
 
   # only from main, in a job that uses the `production` environment
-  - repository: cloudyhome/infra
+  - repository: cloudyhomelab/infra
     ref: refs/heads/main
     environment: production
 
   # several repos, only on push or manual runs
-  - repository: [cloudyhome/app, cloudyhome/web-*]
+  - repository: [cloudyhomelab/app, cloudyhomelab/web-*]
     event_name: [push, workflow_dispatch]
 
   # only when called from one specific reusable workflow
-  - job_workflow_ref: "cloudyhome/infra/.github/workflows/ops.yml@refs/heads/main"
+  - job_workflow_ref: "cloudyhomelab/infra/.github/workflows/ops.yml@refs/heads/main"
 ```
 
 Claims you can match on: `repository`, `repository_owner`, `ref`, `ref_type`, `event_name`,
@@ -234,7 +234,7 @@ Tip: `environment` is the strongest gate. It is only in the token when the job d
 `environment: production`, and GitHub's environment protection rules (required reviewers,
 branch restrictions) apply before the job gets a token.
 
-Separately, `server.allowed_org: cloudyhome` rejects every token from outside the org before
+Separately, `server.allowed_org: cloudyhomelab` rejects every token from outside the org before
 any rule is checked.
 
 #### Requiring specific approvers
@@ -247,7 +247,7 @@ control. To decide in the catalog who must have approved, list them:
 homelab.apply:
   approvers: [binarycodes]
   allow:
-    - { repository: cloudyhome/homelab, ref: refs/heads/main, environment: production }
+    - { repository: cloudyhomelab/homelab, ref: refs/heads/main, environment: production }
 ```
 
 Approval still happens in GitHub: the job waits at the environment gate and a reviewer clicks
@@ -286,7 +286,7 @@ A variant that takes a validated argument:
     steps:
       - [/usr/bin/df, -h, "{{ .mount }}"]
     allow:
-      - repository: cloudyhome/infra
+      - repository: cloudyhomelab/infra
         environment: production
 ```
 
@@ -343,7 +343,7 @@ Leave it running and use a second terminal.
 
 ```sh
 export CONTROLPLANE_URL=http://127.0.0.1:8080
-export CONTROLPLANE_TOKEN=$(./bin/cpctl dev-token repository=cloudyhome/infra ref=refs/heads/main)
+export CONTROLPLANE_TOKEN=$(./bin/cpctl dev-token repository=cloudyhomelab/infra ref=refs/heads/main)
 ```
 
 `dev-token` takes any `claim=value` pairs and fills in `repository_owner` from `repository`.
@@ -374,11 +374,11 @@ job d6afe8f282e99935d4919e51 succeeded
 ./bin/cpctl run -p mount=/ host.disk
 
 # with the environment claim it works
-CONTROLPLANE_TOKEN=$(./bin/cpctl dev-token repository=cloudyhome/infra environment=production) \
+CONTROLPLANE_TOKEN=$(./bin/cpctl dev-token repository=cloudyhomelab/infra environment=production) \
   ./bin/cpctl run -p mount=/tmp host.disk
 
 # value outside the enum: expect HTTP 422
-CONTROLPLANE_TOKEN=$(./bin/cpctl dev-token repository=cloudyhome/infra environment=production) \
+CONTROLPLANE_TOKEN=$(./bin/cpctl dev-token repository=cloudyhomelab/infra environment=production) \
   ./bin/cpctl run -p mount=/etc host.disk
 
 # another org: expect HTTP 401
@@ -390,7 +390,7 @@ CONTROLPLANE_TOKEN=$(./bin/cpctl dev-token repository=evil/x) ./bin/cpctl action
 This is exactly what `cpctl` does under the hood:
 
 ```sh
-TOKEN=$(./bin/cpctl dev-token repository=cloudyhome/infra)
+TOKEN=$(./bin/cpctl dev-token repository=cloudyhomelab/infra)
 H="Authorization: Bearer $TOKEN"
 
 curl -s http://127.0.0.1:8080/healthz
@@ -436,7 +436,7 @@ actions:
     allowed_refs: ["refs/heads/*"]
     steps:
       - [/usr/bin/ansible-playbook, -i, inventories/dev, --check, --diff, site.yml]
-    allow: [{ repository: cloudyhome/app }]
+    allow: [{ repository: cloudyhomelab/app }]
 ```
 
 Commit your changes first. The server runs committed code at the resolved commit, not your
@@ -548,7 +548,7 @@ In `catalog.yml`:
 ```yaml
 server:
   oidc_audience: controlplane_cloudyhome   # any string; must match the workflow
-  allowed_org: cloudyhome
+  allowed_org: cloudyhomelab
 ```
 
 Workflows must ask GitHub for a token with this exact audience (the `audience` input below).
@@ -579,12 +579,12 @@ For a line-by-line walkthrough of the `uses:` step, see `github-action-uses.md` 
 
 ### Step 1: let other repos use the action
 
-If `cloudyhome/controlplane` is private: in its GitHub settings, go to Actions > General >
-Access and choose "Accessible from repositories in the 'cloudyhome' organization".
+If `cloudyhomelab/control-plane` is private: in its GitHub settings, go to Actions > General >
+Access and choose "Accessible from repositories in the 'cloudyhomelab' organization".
 
 ### Step 2: add a workflow to the calling repo
 
-`cloudyhome/infra/.github/workflows/uptime.yml`:
+`cloudyhomelab/infra/.github/workflows/uptime.yml`:
 
 ```yaml
 name: uptime
@@ -599,7 +599,7 @@ jobs:
   uptime:
     runs-on: ubuntu-latest
     steps:
-      - uses: cloudyhome/controlplane/action@main
+      - uses: cloudyhomelab/control-plane/action@main
         with:
           server: https://controlplane.cloudyhome.net
           audience: controlplane_cloudyhome
@@ -614,7 +614,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: production        # puts environment=production in the token
     steps:
-      - uses: cloudyhome/controlplane/action@main
+      - uses: cloudyhomelab/control-plane/action@main
         with:
           server: https://controlplane.cloudyhome.net
           audience: controlplane_cloudyhome
