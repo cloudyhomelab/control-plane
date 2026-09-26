@@ -1,0 +1,3 @@
+kind: Internal
+body: The guide shows how to test a deployed control plane on its host with `-insecure-dev-auth`, before any GitHub workflow calls it.
+time: 2026-09-26T22:25:43.619102908Z

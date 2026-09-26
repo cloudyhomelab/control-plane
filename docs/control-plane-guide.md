@@ -554,6 +554,55 @@ server:
 Workflows must ask GitHub for a token with this exact audience (the `audience` input below).
 This stops a token minted for another service from being replayed here.
 
+### Step 8: test it on the host before wiring up GitHub
+
+Section 4 works on the host too: run a second instance with `-insecure-dev-auth` next to the
+service. It runs your real catalog as the service user, so deploy keys, `/dev/kvm`, docker
+access and the env file are all exercised. Leave the systemd unit as it is.
+
+Install `cpctl` next to the server:
+
+```sh
+CGO_ENABLED=0 go build -trimpath -ldflags=-s -o cpctl ./cmd/cpctl
+sudo install -m 755 cpctl /usr/local/bin/cpctl
+```
+
+Start the dev instance in the foreground on its own port and data directory, so it shares no
+state with the service (Ctrl-C stops it):
+
+```sh
+sudo systemd-run --pty --uid=controlplane -p EnvironmentFile=-/etc/controlplane/env \
+  /usr/local/bin/controlplane -config /etc/controlplane/catalog.yml \
+  -data-dir /var/lib/controlplane/dev -listen 127.0.0.1:8081 -insecure-dev-auth
+```
+
+In another shell on the host, make tokens and run actions as in section 4:
+
+```sh
+export CONTROLPLANE_URL=http://127.0.0.1:8081
+export CONTROLPLANE_TOKEN=$(cpctl dev-token repository=cloudyhomelab/infra ref=refs/heads/main environment=production)
+cpctl actions
+cpctl run host.uptime
+```
+
+The dev instance only listens on loopback. To drive it from your laptop, tunnel the port and
+set `CONTROLPLANE_URL=http://127.0.0.1:8081` locally:
+
+```sh
+ssh -L 8081:127.0.0.1:8081 controlplane-host
+```
+
+What this does not test:
+
+- **OIDC verification** (signature, issuer, audience). Only a GitHub Actions run can mint a
+  real token, so the first workflow run in section 6 covers that.
+- **Actions with `approvers`**. The server reads the approvals of the token's `run_id` from
+  the GitHub API, and a dev token has no real run behind it, so these are refused. Test the rest
+  of such an action with a copy of the catalog that leaves `approvers` out.
+
+Stop the dev instance when you're done. Unverified tokens are accepted for as long as it runs,
+even on loopback.
+
 ## 6. Calling it from a GitHub Actions workflow
 
 ### How the composite action works
