@@ -179,7 +179,7 @@ object of claims as the bearer token:
 ```sh
 go run ./cmd/controlplane -config examples/dev-catalog.yml -data-dir ./data -insecure-dev-auth &
 export CONTROLPLANE_URL=http://127.0.0.1:8080
-export CONTROLPLANE_TOKEN=$(go run ./cmd/cpctl dev-token repository=cloudyhome/infra ref=refs/heads/main)
+export CONTROLPLANE_TOKEN=$(go run ./cmd/cpctl dev-token repository=cloudyhomelab/infra ref=refs/heads/main)
 go run ./cmd/cpctl run host.uptime
 ```
 

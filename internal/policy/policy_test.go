@@ -9,10 +9,10 @@ import (
 func TestAllowed(t *testing.T) {
 	var rules []Rule
 	src := `
-- repository: cloudyhome/infra
+- repository: cloudyhomelab/infra
   ref: refs/heads/main
   environment: production
-- repository: [cloudyhome/app, cloudyhome/web-*]
+- repository: [cloudyhomelab/app, cloudyhomelab/web-*]
   event_name: push
 `
 	if err := yaml.Unmarshal([]byte(src), &rules); err != nil {
@@ -22,11 +22,11 @@ func TestAllowed(t *testing.T) {
 		claims Claims
 		want   bool
 	}{
-		{Claims{"repository": "cloudyhome/infra", "ref": "refs/heads/main", "environment": "production"}, true},
-		{Claims{"repository": "cloudyhome/infra", "ref": "refs/heads/main"}, false},
-		{Claims{"repository": "cloudyhome/infra", "ref": "refs/pull/1/merge", "environment": "production"}, false},
-		{Claims{"repository": "cloudyhome/web-shop", "event_name": "push"}, true},
-		{Claims{"repository": "cloudyhome/web-shop", "event_name": "pull_request"}, false},
+		{Claims{"repository": "cloudyhomelab/infra", "ref": "refs/heads/main", "environment": "production"}, true},
+		{Claims{"repository": "cloudyhomelab/infra", "ref": "refs/heads/main"}, false},
+		{Claims{"repository": "cloudyhomelab/infra", "ref": "refs/pull/1/merge", "environment": "production"}, false},
+		{Claims{"repository": "cloudyhomelab/web-shop", "event_name": "push"}, true},
+		{Claims{"repository": "cloudyhomelab/web-shop", "event_name": "pull_request"}, false},
 		{Claims{"repository": "evil/app", "event_name": "push"}, false},
 	}
 	for index, testCase := range cases {
@@ -34,7 +34,7 @@ func TestAllowed(t *testing.T) {
 			t.Errorf("case %d: got %v, want %v", index, got, testCase.want)
 		}
 	}
-	if Allowed(nil, Claims{"repository": "cloudyhome/infra"}) {
+	if Allowed(nil, Claims{"repository": "cloudyhomelab/infra"}) {
 		t.Error("no rules must deny")
 	}
 }

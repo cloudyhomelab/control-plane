@@ -55,7 +55,7 @@ func TestRenderKeepsValuesAsOneArgument(t *testing.T) {
 }
 
 const base = `
-server: { oidc_audience: aud, allowed_org: cloudyhome }
+server: { oidc_audience: aud, allowed_org: cloudyhomelab }
 repos: { infra: { url: /tmp/x } }
 actions:
 `

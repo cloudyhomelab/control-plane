@@ -151,7 +151,7 @@ apply:
   runner won't hand out an OIDC token, and `cpctl` fails with "no OIDC token available".
 - **Private repo:** if `cloudyhomelab/control-plane` is private, other repos can only use its
   action after you set Settings > Actions > General > Access to "Accessible from repositories
-  in the 'cloudyhome' organization".
+  in the 'cloudyhomelab' organization".
 - **`@main` is a moving target:** every run uses whatever `main` is at that moment, so a push
   to the controlplane repo changes every workflow that uses it. Once it's stable, pin to a tag
   (`@v1`) or a full commit SHA. A SHA can't be moved.

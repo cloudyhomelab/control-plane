@@ -1,4 +1,4 @@
-# Example workflow in cloudyhome/homelab.
+# Example workflow in cloudyhomelab/homelab.
 # Pull request: plan only, as a preview.
 # Merge to main: plan main, wait for approval in the `production` environment, then apply
 # exactly that plan. Set required reviewers on the environment (Settings > Environments).

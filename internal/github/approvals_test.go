@@ -18,11 +18,11 @@ func TestRunApprovals(t *testing.T) {
 	}))
 	defer server.Close()
 
-	approvals, err := Client{APIURL: server.URL, Token: "tok"}.RunApprovals(context.Background(), "cloudyhome/homelab", "42")
+	approvals, err := Client{APIURL: server.URL, Token: "tok"}.RunApprovals(context.Background(), "cloudyhomelab/homelab", "42")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if gotPath != "/repos/cloudyhome/homelab/actions/runs/42/approvals" || gotAuth != "Bearer tok" {
+	if gotPath != "/repos/cloudyhomelab/homelab/actions/runs/42/approvals" || gotAuth != "Bearer tok" {
 		t.Errorf("request = %s %q", gotPath, gotAuth)
 	}
 	if len(approvals) != 1 || approvals[0].Login != "binarycodes" || approvals[0].State != "approved" || approvals[0].Environments[0] != "production" {

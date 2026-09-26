@@ -33,7 +33,7 @@ func setup(t *testing.T, mode string, maxJobs int) *env {
 	origin := testutil.NewTestRepo(t, map[string]string{"tf/fake-mode": mode + "\n"})
 	self, _ := os.Executable()
 	cfg, err := config.Parse([]byte(`
-server: { oidc_audience: aud, allowed_org: cloudyhome, cancel_grace: 2s, max_concurrent_jobs: ` + itoa(maxJobs) + ` }
+server: { oidc_audience: aud, allowed_org: cloudyhomelab, cancel_grace: 2s, max_concurrent_jobs: ` + itoa(maxJobs) + ` }
 repos: { infra: { url: ` + origin + ` } }
 env_profiles:
   fake:
@@ -51,13 +51,13 @@ actions:
     steps:
       - [` + self + `, init, -input=false]
       - [` + self + `, plan, -input=false, "-out={{ .job_dir }}/tfplan", "-var=region={{ .region }}"]
-    allow: [{ repository: cloudyhome/infra }]
+    allow: [{ repository: cloudyhomelab/infra }]
   net.apply:
     input_from: net.plan
     allowed_refs: ["refs/heads/main"]
     steps:
       - [` + self + `, apply, "{{ .input_dir }}/tfplan"]
-    allow: [{ repository: cloudyhome/infra }]
+    allow: [{ repository: cloudyhomelab/infra }]
 `))
 	if err != nil {
 		t.Fatal(err)
@@ -91,7 +91,7 @@ func (testEnv *env) submit(t *testing.T, action, inputJobID string) *Job {
 	job := &Job{
 		ID: NewID(), Action: action, Status: Queued, Params: map[string]string{"region": "eu"},
 		Ref: "refs/heads/main", CommitSHA: sha, InputJobID: inputJobID, LockKey: testEnv.cfg.Actions[action].Lock,
-		Repository: "cloudyhome/infra", Caller: policy.Claims{"repository": "cloudyhome/infra"}, CreatedAt: time.Now(),
+		Repository: "cloudyhomelab/infra", Caller: policy.Claims{"repository": "cloudyhomelab/infra"}, CreatedAt: time.Now(),
 	}
 	if action == "net.apply" {
 		job.Params = map[string]string{}
@@ -211,7 +211,7 @@ func TestLockSerializes(t *testing.T) {
 
 func TestFailInterrupted(t *testing.T) {
 	testEnv := setup(t, "ok", 1)
-	job := &Job{ID: NewID(), Action: "net.plan", Status: Running, Repository: "cloudyhome/infra", CreatedAt: time.Now()}
+	job := &Job{ID: NewID(), Action: "net.plan", Status: Running, Repository: "cloudyhomelab/infra", CreatedAt: time.Now()}
 	testEnv.store.Create(context.Background(), job)
 	if count, err := testEnv.store.FailInterrupted(context.Background()); err != nil || count != 1 {
 		t.Fatalf("n = %d, err = %v", count, err)
@@ -226,7 +226,7 @@ func TestIdempotencyKeyUnique(t *testing.T) {
 	testEnv := setup(t, "ok", 1)
 	createJob := func() error {
 		return testEnv.store.Create(context.Background(), &Job{ID: NewID(), Action: "net.plan", Status: Failed,
-			Repository: "cloudyhome/infra", IdempotencyKey: "run-1", CreatedAt: time.Now()})
+			Repository: "cloudyhomelab/infra", IdempotencyKey: "run-1", CreatedAt: time.Now()})
 	}
 	if err := createJob(); err != nil {
 		t.Fatal(err)
@@ -234,7 +234,7 @@ func TestIdempotencyKeyUnique(t *testing.T) {
 	if err := createJob(); err == nil {
 		t.Error("duplicate idempotency key should fail")
 	}
-	if job, err := testEnv.store.ByIdempotencyKey(context.Background(), "cloudyhome/infra", "run-1"); err != nil || job == nil {
+	if job, err := testEnv.store.ByIdempotencyKey(context.Background(), "cloudyhomelab/infra", "run-1"); err != nil || job == nil {
 		t.Errorf("lookup: %v", err)
 	}
 }

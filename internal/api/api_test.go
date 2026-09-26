@@ -47,9 +47,9 @@ func newHarness(t *testing.T, mode string) *harness {
 	cfg, err := config.Parse([]byte(`
 server:
   oidc_audience: aud
-  allowed_org: cloudyhome
+  allowed_org: cloudyhomelab
   cancel_grace: 2s
-  admins: [{ repository: cloudyhome/ops }]
+  admins: [{ repository: cloudyhomelab/ops }]
 repos: { infra: { url: ` + origin + ` } }
 env_profiles:
   fake: { set: { ` + testutil.FakeToolEnv + `: "1" } }
@@ -64,26 +64,26 @@ actions:
     steps:
       - [` + self + `, init]
       - [` + self + `, plan, "-out={{ .job_dir }}/tfplan", "-var=region={{ .region }}"]
-    allow: [{ repository: cloudyhome/infra }]
+    allow: [{ repository: cloudyhomelab/infra }]
   net.apply:
     input_from: net.plan
     allowed_refs: ["refs/heads/main"]
     require_ref_match: true
     steps:
       - [` + self + `, apply, "{{ .region }}", "{{ .input_dir }}/tfplan"]
-    allow: [{ repository: cloudyhome/infra, environment: production }]
+    allow: [{ repository: cloudyhomelab/infra, environment: production }]
   host.check:
     steps:
       - [` + self + `, check, "{{ .target }}"]
     env_profile: fake
     params: { target: { type: enum, values: [disk, mem] } }
-    allow: [{ repository: cloudyhome/app }]
+    allow: [{ repository: cloudyhomelab/app }]
   host.gated:
     steps:
       - [` + self + `, gated]
     env_profile: fake
     approvers: [binarycodes, other-admin]
-    allow: [{ repository: cloudyhome/app }]
+    allow: [{ repository: cloudyhomelab/app }]
 `))
 	if err != nil {
 		t.Fatal(err)
@@ -96,7 +96,7 @@ actions:
 	src := source.New(data, cfg.Repos)
 	mgr := jobs.NewManager(cfg, store, src, data)
 	runs := &fakeRuns{approvals: map[string][]github.Approval{}}
-	srv := httptest.NewServer(New(cfg, store, mgr, src, auth.Dev{AllowedOrg: "cloudyhome"}, runs).Handler())
+	srv := httptest.NewServer(New(cfg, store, mgr, src, auth.Dev{AllowedOrg: "cloudyhomelab"}, runs).Handler())
 	t.Cleanup(func() {
 		srv.Close()
 		mgr.Shutdown()
@@ -106,11 +106,11 @@ actions:
 }
 
 var (
-	infraPush = map[string]string{"repository": "cloudyhome/infra", "repository_owner": "cloudyhome", "ref": "refs/heads/main", "sub": "repo:cloudyhome/infra", "run_id": "7"}
-	infraProd = map[string]string{"repository": "cloudyhome/infra", "repository_owner": "cloudyhome", "ref": "refs/heads/main", "environment": "production"}
-	infraPR   = map[string]string{"repository": "cloudyhome/infra", "repository_owner": "cloudyhome", "ref": "refs/pull/5/merge", "environment": "production"}
-	otherRepo = map[string]string{"repository": "cloudyhome/app", "repository_owner": "cloudyhome", "ref": "refs/heads/main"}
-	admin     = map[string]string{"repository": "cloudyhome/ops", "repository_owner": "cloudyhome"}
+	infraPush = map[string]string{"repository": "cloudyhomelab/infra", "repository_owner": "cloudyhomelab", "ref": "refs/heads/main", "sub": "repo:cloudyhomelab/infra", "run_id": "7"}
+	infraProd = map[string]string{"repository": "cloudyhomelab/infra", "repository_owner": "cloudyhomelab", "ref": "refs/heads/main", "environment": "production"}
+	infraPR   = map[string]string{"repository": "cloudyhomelab/infra", "repository_owner": "cloudyhomelab", "ref": "refs/pull/5/merge", "environment": "production"}
+	otherRepo = map[string]string{"repository": "cloudyhomelab/app", "repository_owner": "cloudyhomelab", "ref": "refs/heads/main"}
+	admin     = map[string]string{"repository": "cloudyhomelab/ops", "repository_owner": "cloudyhomelab"}
 )
 
 func (testHarness *harness) do(claims map[string]string, method, path, body string, hdr ...string) (*http.Response, []byte) {
@@ -214,7 +214,7 @@ func TestPlanApplyFlow(t *testing.T) {
 
 func TestUnresolvableRef(t *testing.T) {
 	testHarness := newHarness(t, "ok")
-	featurePush := map[string]string{"repository": "cloudyhome/infra", "repository_owner": "cloudyhome", "ref": "refs/heads/feature"}
+	featurePush := map[string]string{"repository": "cloudyhomelab/infra", "repository_owner": "cloudyhomelab", "ref": "refs/heads/feature"}
 	// The test origin has no feature branch, so resolving fails.
 	testHarness.expect(422, featurePush, "POST", "/v1/actions/net.plan/jobs", `{"ref":"refs/heads/feature","params":{"region":"eu"}}`)
 }
@@ -284,14 +284,14 @@ func TestCommandAction(t *testing.T) {
 func TestApprovers(t *testing.T) {
 	testHarness := newHarness(t, "ok")
 	token := func(runID, environment string) map[string]string {
-		claims := map[string]string{"repository": "cloudyhome/app", "repository_owner": "cloudyhome", "run_id": runID}
+		claims := map[string]string{"repository": "cloudyhomelab/app", "repository_owner": "cloudyhomelab", "run_id": runID}
 		if environment != "" {
 			claims["environment"] = environment
 		}
 		return claims
 	}
 	approve := func(runID, login, state string, environments ...string) {
-		key := "cloudyhome/app#" + runID
+		key := "cloudyhomelab/app#" + runID
 		testHarness.runs.approvals[key] = append(testHarness.runs.approvals[key],
 			github.Approval{Login: login, State: state, Environments: environments})
 	}

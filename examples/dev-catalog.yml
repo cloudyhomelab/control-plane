@@ -1,7 +1,7 @@
 # Minimal catalog for trying the control plane locally with -insecure-dev-auth.
 server:
   oidc_audience: dev
-  allowed_org: cloudyhome
+  allowed_org: cloudyhomelab
 
 actions:
   host.uptime:
@@ -10,7 +10,7 @@ actions:
     steps:
       - [/usr/bin/uptime, --pretty]
     allow:
-      - repository: cloudyhome/infra
+      - repository: cloudyhomelab/infra
 
   host.disk:
     description: Show free space on one mount point
@@ -20,5 +20,5 @@ actions:
     steps:
       - [/usr/bin/df, -h, "{{ .mount }}"]
     allow:
-      - repository: cloudyhome/infra
+      - repository: cloudyhomelab/infra
         environment: production
