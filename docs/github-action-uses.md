@@ -1,9 +1,9 @@
-# How `uses: cloudyhomelab/control-plane/action@main` works
+# How `uses: cloudyhomelab/control-plane/action@v0.1.0` works
 
 This explains the workflow step that calls the control plane:
 
 ```yaml
-- uses: cloudyhomelab/control-plane/action@main
+- uses: cloudyhomelab/control-plane/action@v0.1.0
   with:
     server: ${{ env.CP_SERVER }}
     audience: ${{ env.CP_AUDIENCE }}
@@ -19,21 +19,21 @@ action is the `action/` folder of the controlplane repo.
 ## 1. Reading the `uses:` string
 
 ```
-cloudyhomelab/control-plane/action@main
-└──┬─────┘ └────┬─────┘ └─┬──┘ └┬─┘
-  owner       repo      path   git ref (branch, tag or commit SHA)
+cloudyhomelab/control-plane/action@v0.1.0
+└─────┬─────┘ └─────┬─────┘ └─┬──┘ └─┬──┘
+    owner         repo      path   git ref (branch, tag or commit SHA)
 ```
 
 When the job reaches this step, the runner:
 
-1. Downloads `github.com/cloudyhomelab/control-plane` at `main`. It does this itself, before any
+1. Downloads `github.com/cloudyhomelab/control-plane` at `v0.1.0`. It does this itself, before any
    step runs; you don't need `actions/checkout` for it.
 2. Goes into the `action/` subfolder and reads `action/action.yml`. That file is what makes a
    folder an action.
 3. Sees `runs: using: composite`, so it runs the steps listed in that file inside your job,
    on the same runner.
 
-Without a path (`cloudyhomelab/control-plane@main`), it would look for `action.yml` at the repo
+Without a path (`cloudyhomelab/control-plane@v0.1.0`), it would look for `action.yml` at the repo
 root. The subfolder keeps the action separate from the server code.
 
 ## 2. `with:` fills the action's inputs
@@ -65,27 +65,20 @@ The `${{ ... }}` parts are evaluated in your workflow before the action ever see
 
 ## 3. What the action then does
 
-The composite action runs three steps from `action/action.yml`.
+The composite action in `action/action.yml` downloads `cpctl` with `action/download-cpctl.sh`,
+then runs it.
 
-**Step 1: install Go.**
+**Step 1: download `cpctl` from the release.** The action only runs released binaries, so
+the `uses:` ref must be a release tag (`@v0.1.0`) or the full commit SHA a release tag points
+at. For a SHA it finds the tag with `git ls-remote --tags`. It then downloads that release's
+`linux-<arch>-cpctl`, checks it against the release's `SHA256SUMS`, and checks that
+`cpctl version` prints the release's version.
 
-```yaml
-- uses: actions/setup-go@v5
-  with:
-    go-version-file: ${{ github.action_path }}/../go.mod
-```
+The step fails, and nothing runs, if the ref is anything else (`@main`, a SHA no release tag
+points at, `./action`), if the runner is not Linux on x64 or arm64, if the download fails, or
+if the checksum or version does not match.
 
-`github.action_path` is where the runner downloaded the action, i.e.
-`.../cloudyhomelab/control-plane/main/action`, so `../go.mod` is the controlplane repo's `go.mod`.
-
-**Step 2: build `cpctl`** from that same download:
-
-```yaml
-- working-directory: ${{ github.action_path }}/..
-  run: go build -trimpath -o "$RUNNER_TEMP/cpctl" ./cmd/cpctl
-```
-
-**Step 3: run it.** The inputs are passed as environment variables, not pasted into the script:
+**Step 2: run it.** The inputs are passed as environment variables, not pasted into the script:
 
 ```yaml
 env:
@@ -134,12 +127,12 @@ plan:
     job_id: ${{ steps.plan.outputs.job_id }}   # step output -> job output
   steps:
     - id: plan                                 # the id makes steps.plan.* work
-      uses: cloudyhomelab/control-plane/action@main
+      uses: cloudyhomelab/control-plane/action@v0.1.0
       ...
 apply:
   needs: plan
   steps:
-    - uses: cloudyhomelab/control-plane/action@main
+    - uses: cloudyhomelab/control-plane/action@v0.1.0
       with:
         action: network.apply
         input-job: ${{ needs.plan.outputs.job_id }}
@@ -149,14 +142,13 @@ apply:
 
 - **Permissions:** the calling workflow needs `permissions: id-token: write`. Without it the
   runner won't hand out an OIDC token, and `cpctl` fails with "no OIDC token available".
-- **Private repo:** if `cloudyhomelab/control-plane` is private, other repos can only use its
-  action after you set Settings > Actions > General > Access to "Accessible from repositories
-  in the 'cloudyhomelab' organization".
-- **`@main` is a moving target:** every run uses whatever `main` is at that moment, so a push
-  to the controlplane repo changes every workflow that uses it. Once it's stable, pin to a tag
-  (`@v1`) or a full commit SHA. A SHA can't be moved.
-- **Inside the controlplane repo you can use a local path:** a workflow there can say
-  `uses: ./action`, which needs `actions/checkout` first since the path is relative to the
-  checkout. That's handy for testing changes to the action before merging.
-- **Speed:** building `cpctl` adds roughly 20 to 40 seconds per step (Go setup plus compile).
-  If that gets annoying, publish `cpctl` as a release binary and change step 2 to download it.
+- **The repo must stay public:** the action lists tags and downloads release files without
+  a token. If `cloudyhomelab/control-plane` became private, other repos could only reach its
+  action after Settings > Actions > General > Access is set to "Accessible from repositories
+  in the 'cloudyhomelab' organization", and the download would still fail.
+- **Pin a release:** `@v0.1.0` or its commit SHA runs exactly that release, and with
+  immutable releases on (see RELEASE.md) neither the tag nor its files can change. Moving to
+  a newer release is a deliberate edit of the pin in each workflow.
+- **No local path:** `uses: ./action` fails, since a checkout is not a release. A change to
+  the action is tried by releasing it, or by a rehearsal of the Release workflow for `cpctl`.
+- **Speed:** the download is a few MB and takes about a second; no Go setup or compile.

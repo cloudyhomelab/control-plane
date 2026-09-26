@@ -32,14 +32,14 @@ outputs:
 runs:
   using: composite
   steps:
-    - uses: actions/setup-go@v5
-      with:
-        go-version-file: ${{ github.action_path }}/../go.mod
-        cache: false
-    - name: Build cpctl
+    - name: Download cpctl
       shell: bash
-      working-directory: ${{ github.action_path }}/..
-      run: go build -trimpath -o "$RUNNER_TEMP/cpctl" ./cmd/cpctl
+      env:
+        REPO: ${{ github.action_repository }}
+        REF: ${{ github.action_ref }}
+        OS: ${{ runner.os }}
+        ARCH: ${{ runner.arch }}
+      run: bash "$GITHUB_ACTION_PATH/download-cpctl.sh"
     - id: run
       name: Run ${{ inputs.action }}
       shell: bash
