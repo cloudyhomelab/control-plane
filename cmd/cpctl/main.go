@@ -92,14 +92,37 @@ func fatal(err error) {
 	os.Exit(1)
 }
 
+const (
+	// Age at which a cached OIDC token is refreshed, well before GitHub's expiry.
+	tokenRefreshAfter = time.Minute
+	// A cached token is still sent until this long before its exp, covering clock skew and request time.
+	tokenExpiryMargin = 30 * time.Second
+	// Backoff between attempts after a transient failure, doubling up to the max.
+	retryInitial = time.Second
+	retryMax     = 16 * time.Second
+	// Attempts per request; 1+2+4+8+16 s of backoff rides out a short outage.
+	retryAttempts = 6
+)
+
 type client struct {
 	base, audience, static string
 	http                   *http.Client
 
-	mu      sync.Mutex
-	token   string
-	fetched time.Time
+	mu         sync.Mutex
+	token      string
+	fetched    time.Time
+	expires    time.Time
+	retryAt    time.Time
+	retryDelay time.Duration
 }
+
+// statusError is an HTTP error answer from the OIDC token endpoint or the control plane.
+type statusError struct {
+	code int
+	msg  string
+}
+
+func (err statusError) Error() string { return err.msg }
 
 func newClient() (*client, error) {
 	base := strings.TrimSuffix(os.Getenv("CONTROLPLANE_URL"), "/")
@@ -115,45 +138,143 @@ func newClient() (*client, error) {
 }
 
 // bearer returns a GitHub OIDC token, refreshed every minute since they are short lived.
+// While the token endpoint fails transiently, the cached token is used until its exp and
+// refreshes are retried with backoff; without a usable token, bearer waits out the backoff.
 func (apiClient *client) bearer(ctx context.Context) (string, error) {
 	if apiClient.static != "" {
 		return apiClient.static, nil
 	}
 	apiClient.mu.Lock()
 	defer apiClient.mu.Unlock()
-	if apiClient.token != "" && time.Since(apiClient.fetched) < time.Minute {
+	if apiClient.token != "" && time.Since(apiClient.fetched) < tokenRefreshAfter {
 		return apiClient.token, nil
 	}
+	if apiClient.cachedValid() && time.Now().Before(apiClient.retryAt) {
+		return apiClient.token, nil
+	}
+	for attempt := 1; ; attempt++ {
+		token, expires, err := fetchOIDCToken(ctx, apiClient.http, apiClient.audience)
+		if err == nil {
+			apiClient.token, apiClient.fetched, apiClient.expires = token, time.Now(), expires
+			apiClient.retryAt, apiClient.retryDelay = time.Time{}, 0
+			return token, nil
+		}
+		if !transient(err) {
+			return "", err
+		}
+		apiClient.retryDelay = nextDelay(apiClient.retryDelay)
+		apiClient.retryAt = time.Now().Add(apiClient.retryDelay)
+		if apiClient.cachedValid() {
+			fmt.Fprintf(os.Stderr, "cpctl: %v; keeping the current token, retrying in %s\n", err, apiClient.retryDelay)
+			return apiClient.token, nil
+		}
+		if attempt == retryAttempts {
+			return "", err
+		}
+		fmt.Fprintf(os.Stderr, "cpctl: %v; retrying in %s\n", err, apiClient.retryDelay)
+		if err := sleep(ctx, apiClient.retryDelay); err != nil {
+			return "", err
+		}
+	}
+}
+
+func (apiClient *client) cachedValid() bool {
+	return apiClient.token != "" && time.Now().Before(apiClient.expires.Add(-tokenExpiryMargin))
+}
+
+func fetchOIDCToken(ctx context.Context, httpClient *http.Client, audience string) (string, time.Time, error) {
 	reqURL, reqTok := os.Getenv("ACTIONS_ID_TOKEN_REQUEST_URL"), os.Getenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN")
 	if reqURL == "" || reqTok == "" {
-		return "", errors.New("no OIDC token available: add `permissions: id-token: write` to the workflow, or set CONTROLPLANE_TOKEN")
+		return "", time.Time{}, errors.New("no OIDC token available: add `permissions: id-token: write` to the workflow, or set CONTROLPLANE_TOKEN")
 	}
-	if apiClient.audience != "" {
-		reqURL += "&audience=" + url.QueryEscape(apiClient.audience)
+	if audience != "" {
+		reqURL += "&audience=" + url.QueryEscape(audience)
 	}
 	req, _ := http.NewRequestWithContext(ctx, "GET", reqURL, nil)
 	req.Header.Set("Authorization", "Bearer "+reqTok)
-	resp, err := apiClient.http.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("fetch OIDC token: %w", err)
+		return "", time.Time{}, fmt.Errorf("fetch OIDC token: %w", err)
 	}
 	defer resp.Body.Close()
 	var body struct{ Value string }
 	if resp.StatusCode != 200 || json.NewDecoder(resp.Body).Decode(&body) != nil || body.Value == "" {
-		return "", fmt.Errorf("fetch OIDC token: HTTP %d", resp.StatusCode)
+		return "", time.Time{}, statusError{resp.StatusCode, fmt.Sprintf("fetch OIDC token: HTTP %d", resp.StatusCode)}
 	}
-	apiClient.token, apiClient.fetched = body.Value, time.Now()
-	return apiClient.token, nil
+	expires := tokenExpiry(body.Value)
+	return body.Value, expires, nil
 }
 
-func (apiClient *client) do(ctx context.Context, method, path string, body any, hdr map[string]string) (*http.Response, []byte, error) {
-	tok, err := apiClient.bearer(ctx)
-	if err != nil {
-		return nil, nil, err
+// transient reports whether a failure is worth retrying: network errors, 429 and 5xx.
+func transient(err error) bool {
+	var status statusError
+	if errors.As(err, &status) {
+		return status.code == http.StatusTooManyRequests || status.code >= 500
 	}
-	var requestBody io.Reader
+	var urlErr *url.Error
+	return errors.As(err, &urlErr)
+}
+
+func nextDelay(delay time.Duration) time.Duration {
+	return min(max(2*delay, retryInitial), retryMax)
+}
+
+func sleep(ctx context.Context, delay time.Duration) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(delay):
+		return nil
+	}
+}
+
+// tokenExpiry reads the exp claim without verifying the JWT; the zero time means unknown,
+// so the token is never used past its refresh age.
+func tokenExpiry(token string) time.Time {
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return time.Time{}
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return time.Time{}
+	}
+	var claims struct{ Exp int64 }
+	if json.Unmarshal(payload, &claims) != nil || claims.Exp == 0 {
+		return time.Time{}
+	}
+	return time.Unix(claims.Exp, 0)
+}
+
+// do sends a request, retrying transient failures with backoff when repeating it is safe:
+// a repeated cancel at worst answers 409, and a job submission only with an Idempotency-Key.
+func (apiClient *client) do(ctx context.Context, method, path string, body any, hdr map[string]string) (*http.Response, []byte, error) {
+	var payload []byte
 	if body != nil {
-		payload, _ := json.Marshal(body)
+		payload, _ = json.Marshal(body)
+	}
+	repeatable := method == "GET" || strings.HasSuffix(path, "/cancel") || hdr["Idempotency-Key"] != ""
+	var delay time.Duration
+	for attempt := 1; ; attempt++ {
+		tok, err := apiClient.bearer(ctx)
+		if err != nil {
+			return nil, nil, err
+		}
+		resp, responseBody, err := apiClient.send(ctx, method, path, payload, hdr, tok)
+		if err == nil || !repeatable || !transient(err) || attempt == retryAttempts {
+			return resp, responseBody, err
+		}
+		delay = nextDelay(delay)
+		fmt.Fprintf(os.Stderr, "cpctl: %v; retrying in %s\n", err, delay)
+		if err := sleep(ctx, delay); err != nil {
+			return nil, nil, err
+		}
+	}
+}
+
+func (apiClient *client) send(ctx context.Context, method, path string, payload []byte, hdr map[string]string, tok string) (*http.Response, []byte, error) {
+	var requestBody io.Reader
+	if payload != nil {
 		requestBody = bytes.NewReader(payload)
 	}
 	req, err := http.NewRequestWithContext(ctx, method, apiClient.base+path, requestBody)
@@ -177,9 +298,11 @@ func (apiClient *client) do(ctx context.Context, method, path string, body any, 
 	if resp.StatusCode >= 300 {
 		var errorBody struct{ Error, Code string }
 		if json.Unmarshal(responseBody, &errorBody) == nil && errorBody.Error != "" {
-			return resp, responseBody, fmt.Errorf("%s %s: HTTP %d %s: %s", method, path, resp.StatusCode, errorBody.Code, errorBody.Error)
+			msg := fmt.Sprintf("%s %s: HTTP %d %s: %s", method, path, resp.StatusCode, errorBody.Code, errorBody.Error)
+			return resp, responseBody, statusError{resp.StatusCode, msg}
 		}
-		return resp, responseBody, fmt.Errorf("%s %s: HTTP %d", method, path, resp.StatusCode)
+		msg := fmt.Sprintf("%s %s: HTTP %d", method, path, resp.StatusCode)
+		return resp, responseBody, statusError{resp.StatusCode, msg}
 	}
 	return resp, responseBody, nil
 }
