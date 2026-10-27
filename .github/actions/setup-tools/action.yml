@@ -3,7 +3,7 @@ description: Go from go.mod, and Task, whose Taskfile pins changie.
 runs:
   using: composite
   steps:
-    - uses: actions/setup-go@v5
+    - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
       with:
         go-version-file: go.mod
-    - uses: go-task/setup-task@v1
+    - uses: go-task/setup-task@70f2430ad412f838533de8c0515c749ffb2b8bd3 # v1.1.0

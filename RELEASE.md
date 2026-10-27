@@ -58,7 +58,8 @@ task changie -- new --kind Fixed --body 'cpctl logs no longer stops at the first
 ```
 
 The `fragment` job in `check.yml` fails a pull request that adds none, unless it changes a
-released version's notes (`.changes/X.Y.Z.md`) instead. `task changelog:check` checks that
+released version's notes (`.changes/X.Y.Z.md`) instead. Dependabot's pull requests are exempt:
+they only bump workflow actions, which never reach a release. `task changelog:check` checks that
 fragments parse and that `CHANGELOG.md` is in sync; CI runs it.
 
 | Kind | For | Bump |
