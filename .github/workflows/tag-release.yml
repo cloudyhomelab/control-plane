@@ -44,13 +44,13 @@ jobs:
 
       - name: Mint a token for the App
         id: app
-        uses: actions/create-github-app-token@v3
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           client-id: ${{ secrets.CLOUDYHOME_BOT_CLIENT_ID }}
           private-key: ${{ secrets.CLOUDYHOME_BOT_PRIVATE_KEY }}
 
       # The merge commit and nothing later: main may have moved on by the time this runs.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ github.event.pull_request.merge_commit_sha || 'main' }}
           fetch-depth: 0
