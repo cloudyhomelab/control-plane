@@ -1,0 +1,28 @@
+[Unit]
+Description=Infra control plane
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=controlplane
+Group=controlplane
+Environment=CONTROLPLANE_LISTEN=127.0.0.1:8080
+EnvironmentFile=-/etc/controlplane/env
+ExecStartPre=/usr/bin/controlplane -config /etc/controlplane/catalog.yml -check
+ExecStart=/usr/bin/controlplane -config /etc/controlplane/catalog.yml -data-dir /var/lib/controlplane -listen ${CONTROLPLANE_LISTEN}
+StateDirectory=controlplane
+StateDirectoryMode=0750
+# SIGTERM makes the server SIGINT running tools
+KillMode=mixed
+TimeoutStopSec=90
+Restart=on-failure
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/var/lib/controlplane
+
+[Install]
+WantedBy=multi-user.target

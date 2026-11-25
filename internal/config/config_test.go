@@ -5,6 +5,18 @@ import (
 	"testing"
 )
 
+func TestHostExampleCatalog(t *testing.T) {
+	cfg, err := Load("../../examples/host-catalog.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"host.uptime", "host.uname"} {
+		if _, ok := cfg.Actions[name]; !ok {
+			t.Errorf("missing action %s", name)
+		}
+	}
+}
+
 func TestExampleCatalog(t *testing.T) {
 	cfg, err := Load("../../examples/catalog.yml")
 	if err != nil {

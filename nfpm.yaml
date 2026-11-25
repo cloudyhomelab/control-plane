@@ -1,0 +1,57 @@
+# VERSION and ARCH (Go names: amd64, arm64) come from the environment; `task package` sets them.
+name: controlplane
+arch: ${ARCH}
+platform: linux
+version: ${VERSION}
+section: default
+priority: extra
+maintainer: Sujoy Das <me@binarycodes.io>
+description: Infra control plane server and its cpctl client
+homepage: https://github.com/cloudyhomelab/control-plane
+license: GPL-3.0-or-later
+
+archlinux:
+  packager: Sujoy Das <me@binarycodes.io>
+  pkgbase: controlplane
+
+contents:
+  - src: ./bin/linux-${ARCH}-controlplane
+    expand: true
+    dst: /usr/bin/controlplane
+    file_info:
+      mode: 0755
+      owner: root
+      group: root
+
+  - src: ./bin/linux-${ARCH}-cpctl
+    expand: true
+    dst: /usr/bin/cpctl
+    file_info:
+      mode: 0755
+      owner: root
+      group: root
+
+  - src: ./packaging/controlplane.service
+    dst: /usr/lib/systemd/system/controlplane.service
+    file_info:
+      mode: 0644
+
+  - src: ./packaging/controlplane.sysusers
+    dst: /usr/lib/sysusers.d/controlplane.conf
+    file_info:
+      mode: 0644
+
+  - src: ./examples/host-catalog.yml
+    dst: /usr/share/doc/controlplane/examples/catalog.yml
+    file_info:
+      mode: 0644
+
+  - src: ./LICENSE
+    dst: /usr/share/licenses/controlplane/LICENSE
+    file_info:
+      mode: 0644
+
+scripts:
+  postinstall: ./packaging/postinstall.sh
+  preremove: ./packaging/preremove.sh
+  postremove: ./packaging/postremove.sh

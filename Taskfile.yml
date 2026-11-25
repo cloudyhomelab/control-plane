@@ -2,6 +2,7 @@ version: '3'
 
 vars:
   CHANGIE: github.com/miniscruff/changie@v1.26.0
+  NFPM: github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.48.0
 
 tasks:
   default:
@@ -36,6 +37,18 @@ tasks:
             CGO_ENABLED=0 GOOS={{.ITEM.OS}} GOARCH={{.ITEM.ARCH}} go build -trimpath -ldflags="-s -X main.version={{.VERSION | default "dev"}}" -o bin/{{.ITEM.OS}}-{{.ITEM.ARCH}}-$cmd ./cmd/$cmd
           done
 
+  package:
+    desc: Package the built binaries as deb, rpm and Arch packages into bin/; needs VERSION=X.Y.Z and a prior build
+    silent: true
+    requires:
+      vars: [VERSION]
+    cmds:
+      - for:
+          matrix:
+            ARCH: [amd64, arm64]
+            PACKAGER: [deb, rpm, archlinux]
+        cmd: ARCH={{.ITEM.ARCH}} VERSION={{.VERSION}} go run {{.NFPM}} package --config nfpm.yaml --packager {{.ITEM.PACKAGER}} --target bin/
+
   clean:
     desc: Remove build output in bin/
     silent: true
@@ -52,7 +65,7 @@ tasks:
     desc: Lint the shell scripts
     silent: true
     cmds:
-      - shellcheck action/*.sh .githooks/commit-msg
+      - shellcheck action/*.sh packaging/*.sh .githooks/commit-msg
 
   test:
     desc: Run the tests
