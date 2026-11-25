@@ -19,6 +19,38 @@ jobs:
         run: task fmt:check
       - name: Build
         run: task build
+      - name: Package
+        run: task package VERSION=0.0.0
+      # Only the deb installs on this runner; it is what runs the install scripts and the unit.
+      - name: Smoke-test the deb
+        run: |
+          sudo apt-get install -y ./bin/controlplane_0.0.0_amd64.deb
+          id controlplane
+          controlplane -version
+          cpctl version
+          systemd-analyze verify /usr/lib/systemd/system/controlplane.service
+
+          sudo mkdir -p /etc/controlplane
+          sudo cp /usr/share/doc/controlplane/examples/catalog.yml /etc/controlplane/catalog.yml
+          sudo systemctl start controlplane
+          curl -fsS --retry 10 --retry-connrefused --retry-delay 1 http://127.0.0.1:8080/healthz
+
+          sudo mkdir -p /etc/systemd/system/controlplane.service.d
+          printf '[Service]\nEnvironment=CONTROLPLANE_LISTEN=127.0.0.1:8081\n' \
+            | sudo tee /etc/systemd/system/controlplane.service.d/listen.conf
+          sudo systemctl daemon-reload
+          sudo systemctl restart controlplane
+          curl -fsS --retry 10 --retry-connrefused --retry-delay 1 http://127.0.0.1:8081/healthz
+
+          sudo apt-get remove -y controlplane
+          if systemctl is-active --quiet controlplane; then
+            echo "::error::controlplane still runs after the package was removed." >&2
+            exit 1
+          fi
+          [ ! -e /usr/lib/systemd/system/controlplane.service ]
+      - name: Show the service log
+        if: failure()
+        run: sudo journalctl -u controlplane --no-pager || true
       - name: Vet
         run: task vet
       - name: Test

@@ -91,12 +91,14 @@ tasks:
         }
 
   check:
-    desc: Everything CI runs
+    desc: Everything CI runs except the deb install test, which needs root and systemd
     silent: true
     cmds:
       - task: clean
       - task: fmt:check
       - task: build
+      - task: package
+        vars: {VERSION: 0.0.0}
       - task: vet
       - task: test
       - task: shellcheck
