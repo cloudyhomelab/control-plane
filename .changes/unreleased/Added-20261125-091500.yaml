@@ -1,3 +1,0 @@
-kind: Added
-body: Releases carry deb, rpm and Arch packages for amd64 and arm64 that install `controlplane`, `cpctl` and the systemd unit, and create the `controlplane` user.
-time: 2026-11-25T09:15:00.000000000Z
