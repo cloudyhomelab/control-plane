@@ -93,12 +93,16 @@ tasks:
   check:
     desc: Everything CI runs except the deb install test, which needs root and systemd
     silent: true
+    vars:
+      # The deb smoke test in ci.yml installs the package by this version and checks the binaries report it.
+      CHECK_VERSION: 0.0.0
     cmds:
       - task: clean
       - task: fmt:check
       - task: build
+        vars: {VERSION: '{{.CHECK_VERSION}}'}
       - task: package
-        vars: {VERSION: 0.0.0}
+        vars: {VERSION: '{{.CHECK_VERSION}}'}
       - task: vet
       - task: test
       - task: shellcheck

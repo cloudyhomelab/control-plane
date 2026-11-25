@@ -23,8 +23,11 @@ jobs:
         run: |
           sudo apt-get install -y ./bin/controlplane_0.0.0_amd64.deb
           id controlplane
-          controlplane -version
-          cpctl version
+          server="$(controlplane -version)" client="$(cpctl version)"
+          if [ "$server" != 0.0.0 ] || [ "$client" != 0.0.0 ]; then
+            echo "::error::The package holds controlplane $server and cpctl $client, not the 0.0.0 just built." >&2
+            exit 1
+          fi
           systemd-analyze verify /usr/lib/systemd/system/controlplane.service
 
           sudo mkdir -p /etc/controlplane
@@ -44,7 +47,10 @@ jobs:
             echo "::error::controlplane still runs after the package was removed." >&2
             exit 1
           fi
-          [ ! -e /usr/lib/systemd/system/controlplane.service ]
+          if [ -e /usr/lib/systemd/system/controlplane.service ]; then
+            echo "::error::The unit file is still installed after the package was removed." >&2
+            exit 1
+          fi
       - name: Show the service log
         if: failure()
         run: sudo journalctl -u controlplane --no-pager || true
