@@ -193,3 +193,7 @@ Tagged `vX.Y.Z` releases carry linux amd64 and arm64 binaries of `controlplane` 
 with a `SHA256SUMS` file; `controlplane -version` and `cpctl version` report the version.
 Every pull request adds a changelog fragment (`task changie -- new`). [RELEASE.md](RELEASE.md)
 is how a release is cut.
+
+## License
+
+[GPL-3.0-or-later](LICENSE).
