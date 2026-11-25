@@ -15,15 +15,42 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup-tools
-      - name: Format
-        run: task fmt:check
-      - name: Build
-        run: task build
-      - name: Vet
-        run: task vet
-      - name: Test
-        run: task test
-      - name: Shellcheck
-        run: task shellcheck
-      - name: Changelog
-        run: task changelog:check
+      - name: Check
+        run: task check
+      # Outside task check: needs root and systemd. Installs the deb task check built; only the
+      # deb installs on this runner, and it is what runs the install scripts and the unit.
+      - name: Smoke-test the deb
+        run: |
+          sudo apt-get install -y ./bin/controlplane_0.0.0_amd64.deb
+          id controlplane
+          server="$(controlplane -version)" client="$(cpctl version)"
+          if [ "$server" != 0.0.0 ] || [ "$client" != 0.0.0 ]; then
+            echo "::error::The package holds controlplane $server and cpctl $client, not the 0.0.0 just built." >&2
+            exit 1
+          fi
+          systemd-analyze verify /usr/lib/systemd/system/controlplane.service
+
+          sudo mkdir -p /etc/controlplane
+          sudo cp /usr/share/doc/controlplane/examples/catalog.yml /etc/controlplane/catalog.yml
+          sudo systemctl start controlplane
+          curl -fsS --retry 10 --retry-connrefused --retry-delay 1 http://127.0.0.1:8080/healthz
+
+          sudo mkdir -p /etc/systemd/system/controlplane.service.d
+          printf '[Service]\nEnvironment=CONTROLPLANE_LISTEN=127.0.0.1:8081\n' \
+            | sudo tee /etc/systemd/system/controlplane.service.d/listen.conf
+          sudo systemctl daemon-reload
+          sudo systemctl restart controlplane
+          curl -fsS --retry 10 --retry-connrefused --retry-delay 1 http://127.0.0.1:8081/healthz
+
+          sudo apt-get remove -y controlplane
+          if systemctl is-active --quiet controlplane; then
+            echo "::error::controlplane still runs after the package was removed." >&2
+            exit 1
+          fi
+          if [ -e /usr/lib/systemd/system/controlplane.service ]; then
+            echo "::error::The unit file is still installed after the package was removed." >&2
+            exit 1
+          fi
+      - name: Show the service log
+        if: failure()
+        run: sudo journalctl -u controlplane --no-pager || true

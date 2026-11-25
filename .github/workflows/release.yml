@@ -105,6 +105,7 @@ jobs:
           VERSION: ${{ needs.verify.outputs.version }}
         run: |
           task build VERSION="$VERSION"
+          task package VERSION="$VERSION"
           (cd bin && sha256sum * > SHA256SUMS && cat SHA256SUMS)
           [ "$(bin/linux-amd64-controlplane -version)" = "$VERSION" ]
 

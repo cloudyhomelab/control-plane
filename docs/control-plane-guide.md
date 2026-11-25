@@ -449,13 +449,23 @@ the jobs that can't run on a (containerised) GitHub runner: packer qemu builds n
 docker builds need the host's docker daemon, and so on. Putting the server in a container
 would bring those same limits back.
 
-### Step 1: build and install the binary
+### Step 1: install the package
 
-From the repo root:
+Each release carries deb, rpm and Arch packages for amd64 and arm64. They install
+`controlplane` and `cpctl` to `/usr/bin`, the systemd unit, and a sysusers.d entry that creates
+the `controlplane` system user. They neither enable nor start the service.
+
+```sh
+sudo apt install ./controlplane_X.Y.Z_amd64.deb          # Debian, Ubuntu
+sudo dnf install ./controlplane-X.Y.Z-1.x86_64.rpm       # Fedora, RHEL
+sudo pacman -U controlplane-X.Y.Z-1-x86_64.pkg.tar.zst   # Arch
+```
+
+Without a package, build from the repo root and do steps 2 and 5 by hand:
 
 ```sh
 CGO_ENABLED=0 go build -trimpath -ldflags=-s -o controlplane ./cmd/controlplane
-sudo install -m 755 controlplane /usr/local/bin/controlplane
+sudo install -m 755 controlplane /usr/bin/controlplane
 ```
 
 Install the tools your catalog's `steps` call (terraform, packer, ansible, docker, git, ssh,
@@ -463,6 +473,8 @@ Install the tools your catalog's `steps` call (terraform, packer, ansible, docke
 `command -v` on this host.
 
 ### Step 2: create the service user
+
+The package has done this. By hand:
 
 ```sh
 sudo useradd --system --home-dir /var/lib/controlplane --create-home controlplane
@@ -477,9 +489,14 @@ sudo usermod -aG docker controlplane   # docker builds (effectively root on the 
 
 ### Step 3: prepare the config directory
 
+Start from your own catalog, or from the example with two harmless host commands (packaged at
+`/usr/share/doc/controlplane/examples/catalog.yml`, in the repo as `examples/host-catalog.yml`)
+and replace its `your-*` values:
+
 ```sh
 sudo mkdir -p /etc/controlplane/keys
-sudo cp catalog.yml /etc/controlplane/catalog.yml
+sudo cp /usr/share/doc/controlplane/examples/catalog.yml /etc/controlplane/catalog.yml
+sudoedit /etc/controlplane/catalog.yml
 ```
 
 Deploy key, for repo-based actions. Create a read-only deploy key for each repo on GitHub
@@ -507,21 +524,29 @@ A variable only reaches a command if an `env_profile` used by that action lists 
 ### Step 4: validate the catalog
 
 ```sh
-sudo -u controlplane /usr/local/bin/controlplane -config /etc/controlplane/catalog.yml -check
+sudo -u controlplane /usr/bin/controlplane -config /etc/controlplane/catalog.yml -check
 ```
 
 The unit also runs this before every start.
 
 ### Step 5: install and start the unit
 
+The package has installed the unit; without it, copy it first:
+`sudo cp packaging/controlplane.service /etc/systemd/system/ && sudo systemctl daemon-reload`.
+
 ```sh
-sudo cp deploy/controlplane.service /etc/systemd/system/
-sudo systemctl daemon-reload
 sudo systemctl enable --now controlplane
 journalctl -u controlplane -f
 ```
 
-- It listens on 127.0.0.1:8080 only. Put a TLS reverse proxy in front (next step).
+- It listens on 127.0.0.1:8080 only. Put a TLS reverse proxy in front (next step). The server
+  speaks plain HTTP, so listen elsewhere only on a trusted network, with a drop-in
+  (`systemctl edit controlplane`) that survives upgrades:
+
+  ```ini
+  [Service]
+  Environment=CONTROLPLANE_LISTEN=192.0.2.10:8080
+  ```
 - `TimeoutStopSec=90` gives terraform time to release state locks when the service stops.
 - `ProtectSystem=strict` makes the filesystem read-only except `/var/lib/controlplane`. If a
   command writes somewhere else (a packer output directory, say), add it to `ReadWritePaths=`
@@ -560,11 +585,11 @@ Section 4 works on the host too: run a second instance with `-insecure-dev-auth`
 service. It runs your real catalog as the service user, so deploy keys, `/dev/kvm`, docker
 access and the env file are all exercised. Leave the systemd unit as it is.
 
-Install `cpctl` next to the server:
+The package installs `cpctl` next to the server. Without it:
 
 ```sh
 CGO_ENABLED=0 go build -trimpath -ldflags=-s -o cpctl ./cmd/cpctl
-sudo install -m 755 cpctl /usr/local/bin/cpctl
+sudo install -m 755 cpctl /usr/bin/cpctl
 ```
 
 Start the dev instance in the foreground on its own port and data directory, so it shares no
@@ -572,7 +597,7 @@ state with the service (Ctrl-C stops it):
 
 ```sh
 sudo systemd-run --pty --uid=controlplane -p EnvironmentFile=-/etc/controlplane/env \
-  /usr/local/bin/controlplane -config /etc/controlplane/catalog.yml \
+  /usr/bin/controlplane -config /etc/controlplane/catalog.yml \
   -data-dir /var/lib/controlplane/dev -listen 127.0.0.1:8081 -insecure-dev-auth
 ```
 

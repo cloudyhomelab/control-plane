@@ -1,0 +1,3 @@
+kind: Internal
+body: CI builds all packages and installs, starts, reconfigures and removes the deb on every pull request.
+time: 2026-11-25T09:50:00.000000000Z

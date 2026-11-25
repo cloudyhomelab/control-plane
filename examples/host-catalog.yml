@@ -1,0 +1,25 @@
+# Starting point for /etc/controlplane/catalog.yml: two harmless host commands.
+# Replace every your-* value, then check it with `controlplane -config <file> -check`.
+server:
+  # The audience the calling workflows request their OIDC token for.
+  oidc_audience: controlplane
+  # Only tokens from repositories of this GitHub organisation or user are accepted.
+  allowed_org: your-github-org
+
+actions:
+  host.uptime:
+    description: Show how long this host has been up
+    timeout: 1m
+    steps:
+      - [/usr/bin/uptime, --pretty]
+    allow:
+      - repository: your-github-org/your-repo
+
+  host.uname:
+    description: Show the kernel and architecture of this host
+    timeout: 1m
+    steps:
+      - [/usr/bin/uname, -a]
+    allow:
+      - repository: your-github-org/your-repo
+        ref: refs/heads/main

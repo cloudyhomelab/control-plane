@@ -167,7 +167,7 @@ go run ./cmd/controlplane -config examples/catalog.yml -check      # validate ca
 go run ./cmd/controlplane -config catalog.yml -data-dir ./data     # serve on 127.0.0.1:8080
 ```
 
-Run it on the host with `deploy/controlplane.service`, not in a container: it exists for jobs
+Run it on the host with `packaging/controlplane.service`, not in a container: it exists for jobs
 that need host access (packer qemu builds need `/dev/kvm`, docker builds need the docker daemon)
 and so can't run on a containerised runner. Put it behind a TLS reverse proxy.
 Cloud credentials go in the server environment (`/etc/controlplane/env`) and reach a command
@@ -185,11 +185,16 @@ go run ./cmd/cpctl run host.uptime
 
 ## Tests
 
-`task test` (or `go test ./...`); `task check` runs everything CI does, `task fmt` formats. Job runs use the test binary as a fake terraform, so no tools are needed.
+`task test` (or `go test ./...`); `task check` is the manual check before pushing: everything CI runs except the deb install test, which needs root and systemd; `task fmt` formats. Job runs use the test binary as a fake terraform, so no tools are needed.
 
 ## Releases
 
-Tagged `vX.Y.Z` releases carry linux amd64 and arm64 binaries of `controlplane` and `cpctl`
-with a `SHA256SUMS` file; `controlplane -version` and `cpctl version` report the version.
+Tagged `vX.Y.Z` releases carry linux amd64 and arm64 binaries of `controlplane` and `cpctl`,
+deb, rpm and Arch packages that also install the systemd unit and create the `controlplane`
+user (built by `task package` from `nfpm.yaml`), and a `SHA256SUMS` file; `controlplane -version` and `cpctl version` report the version.
 Every pull request adds a changelog fragment (`task changie -- new`). [RELEASE.md](RELEASE.md)
 is how a release is cut.
+
+## License
+
+[GPL-3.0-or-later](LICENSE).
