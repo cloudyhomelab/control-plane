@@ -15,13 +15,10 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup-tools
-      - name: Format
-        run: task fmt:check
-      - name: Build
-        run: task build
-      - name: Package
-        run: task package VERSION=0.0.0
-      # Only the deb installs on this runner; it is what runs the install scripts and the unit.
+      - name: Check
+        run: task check
+      # Outside task check: needs root and systemd. Installs the deb task check built; only the
+      # deb installs on this runner, and it is what runs the install scripts and the unit.
       - name: Smoke-test the deb
         run: |
           sudo apt-get install -y ./bin/controlplane_0.0.0_amd64.deb
@@ -51,11 +48,3 @@ jobs:
       - name: Show the service log
         if: failure()
         run: sudo journalctl -u controlplane --no-pager || true
-      - name: Vet
-        run: task vet
-      - name: Test
-        run: task test
-      - name: Shellcheck
-        run: task shellcheck
-      - name: Changelog
-        run: task changelog:check
