@@ -8,9 +8,10 @@ Type=simple
 User=controlplane
 Group=controlplane
 Environment=CONTROLPLANE_LISTEN=127.0.0.1:8080
+Environment=CONTROLPLANE_CONFIG=/etc/controlplane/catalog.yml
 EnvironmentFile=-/etc/controlplane/env
-ExecStartPre=/usr/bin/controlplane -config /etc/controlplane/catalog.yml -check
-ExecStart=/usr/bin/controlplane -config /etc/controlplane/catalog.yml -data-dir /var/lib/controlplane -listen ${CONTROLPLANE_LISTEN}
+ExecStartPre=/usr/bin/controlplane -config ${CONTROLPLANE_CONFIG} -check
+ExecStart=/usr/bin/controlplane -config ${CONTROLPLANE_CONFIG} -data-dir /var/lib/controlplane -listen ${CONTROLPLANE_LISTEN}
 StateDirectory=controlplane
 StateDirectoryMode=0750
 # SIGTERM makes the server SIGINT running tools

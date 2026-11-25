@@ -1,0 +1,1 @@
+The packaged systemd unit now takes its catalog path from `CONTROLPLANE_CONFIG`, still `/etc/controlplane/catalog.yml` by default, so a `systemctl edit` drop-in can point the service at another catalog and survive upgrades.

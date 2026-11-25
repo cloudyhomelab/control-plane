@@ -547,6 +547,9 @@ journalctl -u controlplane -f
   [Service]
   Environment=CONTROLPLANE_LISTEN=192.0.2.10:8080
   ```
+- It reads the catalog from `CONTROLPLANE_CONFIG` (default `/etc/controlplane/catalog.yml`).
+  Point it elsewhere with `Environment=CONTROLPLANE_CONFIG=...` in the same drop-in; paths
+  under `/home` are hidden by `ProtectHome=yes`.
 - `TimeoutStopSec=90` gives terraform time to release state locks when the service stops.
 - `ProtectSystem=strict` makes the filesystem read-only except `/var/lib/controlplane`. If a
   command writes somewhere else (a packer output directory, say), add it to `ReadWritePaths=`
