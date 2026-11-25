@@ -34,7 +34,7 @@ tasks:
             ARCH: [amd64, arm64]
         cmd: |
           for cmd in controlplane cpctl; do
-            CGO_ENABLED=0 GOOS={{.ITEM.OS}} GOARCH={{.ITEM.ARCH}} go build -trimpath -ldflags="-s -X main.version={{.VERSION | default "dev"}}" -o bin/{{.ITEM.OS}}-{{.ITEM.ARCH}}-$cmd ./cmd/$cmd
+            CGO_ENABLED=0 GOOS={{.ITEM.OS}} GOARCH={{.ITEM.ARCH}} go build -trimpath -ldflags='-s -X main.version={{.VERSION | default "dev"}}' -o bin/{{.ITEM.OS}}-{{.ITEM.ARCH}}-$cmd ./cmd/$cmd
           done
 
   package:
